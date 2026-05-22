@@ -51,6 +51,8 @@ jobs:
   crawl:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -58,6 +60,8 @@ jobs:
         with:
           fetch-depth: 1
           clean: true
+          persist-credentials: true
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Check Expiration
         env:
@@ -168,3 +172,32 @@ jobs:
           S3_REGION: ${{ secrets.S3_REGION }}
           GITHUB_ACTIONS: true
         run: uv run python -m trendradar
+
+      - name: Publish reports to docs/reports/
+        if: success()
+        run: |
+          set -e
+          if [ ! -d output/html ]; then
+            echo "no output/html — nothing to publish"
+            exit 0
+          fi
+          mkdir -p docs/reports
+          # rsync the full date-organised tree
+          cp -r output/html/. docs/reports/
+          # promote latest/incremental.html to docs/reports/index.html for easy access
+          if [ -f docs/reports/latest/incremental.html ]; then
+            cp docs/reports/latest/incremental.html docs/reports/index.html
+          elif [ -f docs/reports/latest/current.html ]; then
+            cp docs/reports/latest/current.html docs/reports/index.html
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/reports/
+          if git diff --cached --quiet; then
+            echo "no changes to publish"
+          else
+            git commit -m "auto: publish reports $(TZ=Asia/Shanghai date +%Y-%m-%d-%H%M)"
+            # tolerate someone else pushing while we ran
+            git pull --rebase origin master || true
+            git push origin master
+          fi
