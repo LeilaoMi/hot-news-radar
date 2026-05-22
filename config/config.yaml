@@ -89,7 +89,7 @@ platforms:
 # max_age_days: 可选，覆盖全局 freshness_filter.max_age_days
 # ===============================================================
 rss:
-  enabled: false                       # 是否启用 RSS 抓取（true=启用, false=关闭）
+  enabled: true                       # 是否启用 RSS 抓取（true=启用, false=关闭）
 
   # 文章新鲜度过滤（过滤超龄旧文章，避免重复推送）
   # 仅在推送阶段过滤，所有文章仍会存入数据库
@@ -131,7 +131,7 @@ rss:
 # 4. 报告模式
 # ===============================================================
 report:
-  mode: "incremental"                     # 报告模式（开启 schedule 后作为默认值，会被 timeline 时段覆盖）
+  mode: "current"                     # 报告模式（开启 schedule 后作为默认值，会被 timeline 时段覆盖）
                                       # daily = 当日汇总，按时推送当天所有匹配新闻（会包含之前推过的）
                                       # current = 当前榜单，按时推送当前在榜的匹配新闻（持续在榜的每次都出现）
                                       # incremental = 增量监控，只推送新增内容，零重复（没有新增时不推送）
