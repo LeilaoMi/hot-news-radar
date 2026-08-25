@@ -2,7 +2,41 @@ name: Get Hot News
 
 on:
   schedule:
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # ⚠️ 试用版说明 / Trial Mode
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    #
+    # 🔄 运行机制 / How it works:
+    #    - 每个周期为 7 天，届时自动停止
+    #    - 运行 "Check In" 会重置周期（重新开始 7 天倒计时，而非累加）
+    #    - Each cycle is 7 days, then auto-stops
+    #    - "Check In" resets the cycle (restarts 7-day countdown, not cumulative)
+    #
+    # 💡 设计初衷 / Why this design:
+    #    如果 7 天都忘了签到，或许这些资讯对你来说并非刚需
+    #    适时的暂停，能帮你从信息流中抽离，给大脑留出喘息的空间
+    #    If you forget for 7 days, maybe you don't really need it
+    #    A timely pause helps you detach from the stream and gives your mind space
+    #
+    # 🙏 珍惜资源 / Respect shared resources:
+    #    GitHub Actions 是平台提供的公共资源，每次运行都会消耗算力
+    #    签到机制确保资源分配给真正需要的用户，感谢你的理解与配合
+    #    GitHub Actions is a shared public resource provided by the platform
+    #    Check-in ensures resources go to those who truly need it — thank you
+    #
+    # 🚀 长期使用请部署 Docker 版本 / For long-term use, deploy Docker version
+    #
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    #
+    # 📝 修改运行时间：只改第一个数字（0-59），表示每小时第几分钟运行
+    # 📝 Change time: Only modify the first number (0-59) = minute of each hour
+    #
+    # 示例 / Examples:
+    #   "15 * * * *"     → 每小时第15分钟 / minute 15 every hour
+    #   "30 0-14 * * *"  → 北京时间 8:00-22:00 每小时第30分钟 / Beijing 8am-10pm
+    #
     - cron: "33 * * * *"
+
   workflow_dispatch:
 
 concurrency:
@@ -71,12 +105,15 @@ jobs:
           NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
           BARK_URL: ${{ secrets.BARK_URL }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          # 通用Webhook配置
           GENERIC_WEBHOOK_URL: ${{ secrets.GENERIC_WEBHOOK_URL }}
           GENERIC_WEBHOOK_TEMPLATE: ${{ secrets.GENERIC_WEBHOOK_TEMPLATE }}
+          # AI 配置（ai_analysis 和 ai_translation 共享模型配置）
           AI_ANALYSIS_ENABLED: ${{ secrets.AI_ANALYSIS_ENABLED }}
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
           AI_MODEL: ${{ secrets.AI_MODEL }}
           AI_API_BASE: ${{ secrets.AI_API_BASE }}
+          # 远程存储配置
           S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
           S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
           S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
@@ -110,3 +147,48 @@ jobs:
             git pull --rebase origin master || true
             git push origin master
           fi
+
+      # --------------------------------------------------------------------------------
+      # ☁️ CLOUDFLARE PAGES DEPLOY / 部署到 Cloudflare Pages（可选）
+      # --------------------------------------------------------------------------------
+      # 将爬虫生成的 index.html 自动部署到 Cloudflare Pages，国内访问比 GitHub Pages 更快。
+      # 仅当下面三个 Secrets 均已配置时才会执行，缺任意一个则自动跳过，不影响其它流程：
+      #   - CLOUDFLARE_API_TOKEN     权限：Account → Cloudflare Pages → Edit
+      #   - CLOUDFLARE_ACCOUNT_ID    Cloudflare 账户 ID
+      #   - CLOUDFLARE_PROJECT_NAME  Cloudflare Pages 项目名（需提前在 Dashboard 创建）
+      # 配置教程详见 README「自动部署到 Cloudflare Pages」章节。
+      # --------------------------------------------------------------------------------
+      - name: Check Cloudflare config
+        if: success()
+        id: cf_check
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_PROJECT_NAME: ${{ secrets.CLOUDFLARE_PROJECT_NAME }}
+        run: |
+          if [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ] && [ -n "$CLOUDFLARE_PROJECT_NAME" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "✅ 检测到 Cloudflare 配置，准备部署到 Cloudflare Pages"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "ℹ️ 未配置 Cloudflare Secrets，跳过 Cloudflare Pages 部署"
+          fi
+
+      - name: Prepare Cloudflare Pages assets
+        if: success() && steps.cf_check.outputs.enabled == 'true'
+        run: |
+          if [ ! -f index.html ]; then
+            echo "❌ 未找到 index.html，请确认爬虫已生成网页报告"
+            exit 1
+          fi
+          rm -rf cloudflare_dist
+          mkdir -p cloudflare_dist
+          cp index.html cloudflare_dist/index.html
+
+      - name: Deploy to Cloudflare Pages
+        if: success() && steps.cf_check.outputs.enabled == 'true'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy cloudflare_dist --project-name=${{ secrets.CLOUDFLARE_PROJECT_NAME }}

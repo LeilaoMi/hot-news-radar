@@ -6,7 +6,7 @@
 """
 
 import re
-from typing import List
+from typing import Dict, List, Optional
 
 
 def clean_title(title: str) -> str:
@@ -59,14 +59,49 @@ def html_escape(text: str) -> str:
     )
 
 
-def format_rank_display(ranks: List[int], rank_threshold: int, format_type: str) -> str:
+def calculate_rank_trend(rank_timeline=None, ranks=None):
+    """根据排名时间线或排名列表计算趋势方向
+
+    Args:
+        rank_timeline: 按时间顺序的排名记录列表，如 [{"time": "10:00", "rank": 5}, ...]
+        ranks: 排名列表
+
+    Returns:
+        "up" (排名上升/数值变小), "down" (排名下降/数值变大), 或 None
+    """
+    prev_rank = None
+    curr_rank = None
+
+    if rank_timeline:
+        valid_ranks = [r["rank"] for r in rank_timeline if r.get("rank") is not None]
+        if len(valid_ranks) >= 2:
+            prev_rank = valid_ranks[-2]
+            curr_rank = valid_ranks[-1]
+    elif ranks and len(ranks) >= 2:
+        prev_rank = ranks[-2]
+        curr_rank = ranks[-1]
+
+    if prev_rank is not None and curr_rank is not None:
+        if curr_rank < prev_rank:
+            return "up"
+        elif curr_rank > prev_rank:
+            return "down"
+    return None
+
+
+def format_rank_display(
+    ranks: List[int],
+    rank_threshold: int,
+    format_type: str,
+    rank_timeline: Optional[List[Dict]] = None,
+) -> str:
     """格式化排名显示
 
     根据不同平台类型生成对应格式的排名字符串。
     当最小排名小于等于阈值时，使用高亮格式。
 
     Args:
-        ranks: 排名列表（可能包含重复值）
+        ranks: 排名列表（去重后的唯一值，用于范围显示）
         rank_threshold: 高亮阈值，小于等于此值的排名会高亮显示
         format_type: 平台类型，支持:
             - "html": HTML格式
@@ -76,6 +111,7 @@ def format_rank_display(ranks: List[int], rank_threshold: int, format_type: str)
             - "telegram": Telegram格式
             - "slack": Slack格式
             - 其他: 默认markdown格式
+        rank_timeline: 按时间顺序的排名记录列表（可选，用于计算趋势）
 
     Returns:
         格式化后的排名字符串，如 "[1]" 或 "[1 - 5]"
@@ -125,17 +161,7 @@ def format_rank_display(ranks: List[int], rank_threshold: int, format_type: str)
         else:
             rank_str = f"[{min_rank} - {max_rank}]"
 
-    # 计算热度趋势
-    trend_arrow = ""
-    if len(ranks) >= 2:
-        prev_rank = ranks[-2]
-        curr_rank = ranks[-1]
-        if curr_rank < prev_rank:
-            trend_arrow = "🔺"  # 排名上升（数值变小）
-        elif curr_rank > prev_rank:
-            trend_arrow = "🔻"  # 排名下降（数值变大）
-        else:
-            trend_arrow = "➖"  # 排名持平
-    # len(ranks) == 1 时不显示趋势箭头（新上榜由 is_new 字段在 formatter.py 中处理）
+    trend = calculate_rank_trend(rank_timeline, ranks)
+    trend_arrow = {"up": "📈", "down": "📉"}.get(trend, "")
 
     return f"{rank_str} {trend_arrow}" if trend_arrow else rank_str

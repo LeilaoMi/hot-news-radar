@@ -13,6 +13,7 @@ import json
 import random
 import time
 from typing import Dict, List, Tuple, Optional, Union
+from urllib.parse import urlparse
 
 import requests
 
@@ -20,7 +21,7 @@ import requests
 class DataFetcher:
     """数据获取器"""
 
-    # 默认 API 地址
+    # 默认 API 地址（newsnow 项目: https://github.com/ourongxing/newsnow）
     DEFAULT_API_URL = "https://newsnow.busiyi.world/api/s"
 
     # 默认请求头
@@ -46,6 +47,41 @@ class DataFetcher:
         """
         self.proxy_url = proxy_url
         self.api_url = api_url or self.DEFAULT_API_URL
+
+    @staticmethod
+    def _check_domain_safety(
+        items: List[Dict],
+        expected_domain: str,
+    ) -> Optional[str]:
+        """
+        校验返回数据中的链接是否为 HTTPS 且域名匹配预期（支持子域名）
+
+        同时校验 url 与 mobileUrl 两个字段，使用标准库解析主机名，
+        避免 userinfo（如 https://baidu.com@evil.com）绕过校验。
+
+        Args:
+            items: API 返回的数据项列表
+            expected_domain: 预期域名（如 "baidu.com"）
+
+        Returns:
+            None 表示安全，否则返回第一个异常描述
+        """
+        expected = expected_domain.lower().strip()
+        if not expected:
+            return None
+
+        for item in items:
+            for field in ("url", "mobileUrl"):
+                url = item.get(field, "")
+                if not url:
+                    continue
+                parsed = urlparse(url)
+                if parsed.scheme != "https":
+                    return f"{url} (非 HTTPS 或格式异常)"
+                hostname = (parsed.hostname or "").lower()
+                if hostname != expected and not hostname.endswith("." + expected):
+                    return f"{hostname} (来自 {url})"
+        return None
 
     def fetch_data(
         self,
@@ -118,6 +154,7 @@ class DataFetcher:
         self,
         ids_list: List[Union[str, Tuple[str, str]]],
         request_interval: int = 100,
+        domain_rules: Optional[Dict[str, str]] = None,
     ) -> Tuple[Dict, Dict, List]:
         """
         爬取多个网站数据
@@ -125,6 +162,7 @@ class DataFetcher:
         Args:
             ids_list: 平台ID列表，每个元素可以是字符串或 (平台ID, 别名) 元组
             request_interval: 请求间隔（毫秒）
+            domain_rules: 域名安全校验规则，格式 {平台ID: 预期域名}（可选）
 
         Returns:
             (结果字典, ID到名称的映射, 失败ID列表) 元组
@@ -132,6 +170,7 @@ class DataFetcher:
         results = {}
         id_to_name = {}
         failed_ids = []
+        domain_rules = domain_rules or {}
 
         for i, id_info in enumerate(ids_list):
             if isinstance(id_info, tuple):
@@ -146,9 +185,24 @@ class DataFetcher:
             if response:
                 try:
                     data = json.loads(response)
+                    items = data.get("items", [])
+
+                    # 域名安全校验
+                    expected_domain = domain_rules.get(id_value, "")
+                    if expected_domain:
+                        bad_reason = self._check_domain_safety(items, expected_domain)
+                        if bad_reason:
+                            print(f"⚠️ 安全警告: {name}({id_value}) 返回数据未通过域名安全校验！")
+                            print(f"   预期域名: https://*.{expected_domain}")
+                            print(f"   异常来源: {bad_reason}")
+                            print(f"   当前 API 地址: {self.api_url}")
+                            print(f"   该平台数据已丢弃，请检查 API 来源是否可信")
+                            failed_ids.append(id_value)
+                            continue
+
                     results[id_value] = {}
 
-                    for index, item in enumerate(data.get("items", []), 1):
+                    for index, item in enumerate(items, 1):
                         title = item.get("title")
                         # 跳过无效标题（None、float、空字符串）
                         if title is None or isinstance(title, float) or not str(title).strip():

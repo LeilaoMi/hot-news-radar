@@ -389,6 +389,9 @@ class SQLiteStorageMixin:
                 for rh_row in cursor.fetchall():
                     news_id, rank, crawl_time = rh_row[0], rh_row[1], rh_row[2]
 
+                    if not crawl_time:
+                        continue
+
                     # 构建 ranks 列表（去重，排除脱榜记录 rank=0）
                     if news_id not in rank_history_map:
                         rank_history_map[news_id] = []
@@ -399,7 +402,10 @@ class SQLiteStorageMixin:
                     if news_id not in rank_timeline_map:
                         rank_timeline_map[news_id] = []
                     # 提取时间部分（HH:MM）
-                    time_part = crawl_time.split()[1][:5] if ' ' in crawl_time else crawl_time[:5]
+                    try:
+                        time_part = crawl_time.split()[1][:5] if ' ' in crawl_time else crawl_time[:5]
+                    except (IndexError, AttributeError):
+                        time_part = "??:??"
                     rank_timeline_map[news_id].append({
                         "time": time_part,
                         "rank": rank if rank != 0 else None  # 0 转为 None 表示脱榜
@@ -535,6 +541,9 @@ class SQLiteStorageMixin:
                 for rh_row in cursor.fetchall():
                     news_id, rank, crawl_time = rh_row[0], rh_row[1], rh_row[2]
 
+                    if not crawl_time:
+                        continue
+
                     # 构建 ranks 列表（去重，排除脱榜记录 rank=0）
                     if news_id not in rank_history_map:
                         rank_history_map[news_id] = []
@@ -545,7 +554,10 @@ class SQLiteStorageMixin:
                     if news_id not in rank_timeline_map:
                         rank_timeline_map[news_id] = []
                     # 提取时间部分（HH:MM）
-                    time_part = crawl_time.split()[1][:5] if ' ' in crawl_time else crawl_time[:5]
+                    try:
+                        time_part = crawl_time.split()[1][:5] if ' ' in crawl_time else crawl_time[:5]
+                    except (IndexError, AttributeError):
+                        time_part = "??:??"
                     rank_timeline_map[news_id].append({
                         "time": time_part,
                         "rank": rank if rank != 0 else None  # 0 转为 None 表示脱榜
@@ -1063,11 +1075,11 @@ class SQLiteStorageMixin:
                         if item.url:
                             historical_urls[feed_id].add(item.url)
 
-            # 检查是否有历史数据
+            # 检查是否有早于当前批次的历史数据
             has_historical_data = any(len(urls) > 0 for urls in historical_urls.values())
             if not has_historical_data:
-                # 第一次抓取，没有"新增"概念
-                return {}
+                # 当天第一次抓取，所有条目都是新增
+                return current_data.items.copy()
 
             # 检测新增
             new_items: Dict[str, List[RSSItem]] = {}
@@ -1607,22 +1619,40 @@ class SQLiteStorageMixin:
 
             # 批量查排名历史（热榜）
             ranks_map: Dict[int, List[int]] = {}
+            rank_timeline_map: Dict[int, List[Dict[str, Any]]] = {}
             if hotlist_news_ids:
                 unique_ids = list(set(hotlist_news_ids))
                 placeholders = ",".join("?" * len(unique_ids))
                 cursor.execute(f"""
-                    SELECT news_item_id, rank FROM rank_history
-                    WHERE news_item_id IN ({placeholders}) AND rank != 0
+                    SELECT news_item_id, rank, crawl_time FROM rank_history
+                    WHERE news_item_id IN ({placeholders})
+                    ORDER BY news_item_id, crawl_time
                 """, unique_ids)
                 for rh_row in cursor.fetchall():
-                    nid, rank = rh_row[0], rh_row[1]
+                    nid, rank, crawl_time = rh_row[0], rh_row[1], rh_row[2]
+
+                    if not crawl_time:
+                        continue
+
                     if nid not in ranks_map:
                         ranks_map[nid] = []
-                    if rank not in ranks_map[nid]:
+                    if rank != 0 and rank not in ranks_map[nid]:
                         ranks_map[nid].append(rank)
+
+                    if nid not in rank_timeline_map:
+                        rank_timeline_map[nid] = []
+                    try:
+                        time_part = crawl_time.split()[1][:5] if ' ' in crawl_time else crawl_time[:5]
+                    except (IndexError, AttributeError):
+                        time_part = "??:??"
+                    rank_timeline_map[nid].append({
+                        "time": time_part,
+                        "rank": rank if rank != 0 else None
+                    })
 
             for item in results:
                 item["ranks"] = ranks_map.get(item["news_item_id"], [item["rank"]])
+                item["rank_timeline"] = rank_timeline_map.get(item["news_item_id"], [])
 
             # RSS 结果（如果有 rss 库）
             try:

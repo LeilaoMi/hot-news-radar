@@ -7,185 +7,23 @@ TrendRadar 主程序
 """
 
 import argparse
-import copy
-import json
 import os
-import re
-import sys
 import webbrowser
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
-
-import requests
+from typing import Dict, List, Optional, Tuple
 
 from trendradar.context import AppContext
 from trendradar import __version__
-from trendradar.core import load_config, parse_multi_account_config, validate_paired_configs
+from trendradar.core import load_config
 from trendradar.core.analyzer import convert_keyword_stats_to_platform_stats
 from trendradar.crawler import DataFetcher
 from trendradar.storage import convert_crawl_results_to_news_data
 from trendradar.utils.time import DEFAULT_TIMEZONE, is_within_days, calculate_days_old
 from trendradar.ai import AIAnalyzer, AIAnalysisResult
 from trendradar.core.scheduler import ResolvedSchedule
+from trendradar.commands import check_all_versions, run_doctor, run_test_notification, handle_status_commands
+from trendradar.commands.version import _fetch_remote_version, _parse_version
 
-
-def _parse_version(version_str: str) -> Tuple[int, int, int]:
-    """解析版本号字符串为元组"""
-    try:
-        parts = version_str.strip().split(".")
-        if len(parts) >= 3:
-            return int(parts[0]), int(parts[1]), int(parts[2])
-        return 0, 0, 0
-    except (ValueError, AttributeError, TypeError):
-        return 0, 0, 0
-
-
-def _compare_version(local: str, remote: str) -> str:
-    """比较版本号，返回状态文字"""
-    local_tuple = _parse_version(local)
-    remote_tuple = _parse_version(remote)
-
-    if local_tuple < remote_tuple:
-        return "⚠️ 需要更新"
-    elif local_tuple > remote_tuple:
-        return "🔮 超前版本"
-    else:
-        return "✅ 已是最新"
-
-
-def _fetch_remote_version(version_url: str, proxy_url: Optional[str] = None) -> Optional[str]:
-    """获取远程版本号"""
-    try:
-        proxies = None
-        if proxy_url:
-            proxies = {"http": proxy_url, "https": proxy_url}
-
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "text/plain, */*",
-            "Cache-Control": "no-cache",
-        }
-
-        response = requests.get(version_url, proxies=proxies, headers=headers, timeout=10)
-        response.raise_for_status()
-        return response.text.strip()
-    except Exception as e:
-        print(f"[版本检查] 获取远程版本失败: {e}")
-        return None
-
-
-def _parse_config_versions(content: str) -> Dict[str, str]:
-    """解析配置文件版本内容为字典"""
-    versions = {}
-    try:
-        if not content:
-            return versions
-        for line in content.splitlines():
-            line = line.strip()
-            if not line or "=" not in line:
-                continue
-            name, version = line.split("=", 1)
-            versions[name.strip()] = version.strip()
-    except Exception as e:
-        print(f"[版本检查] 解析配置版本失败: {e}")
-    return versions
-
-
-def check_all_versions(
-    version_url: str,
-    configs_version_url: Optional[str] = None,
-    proxy_url: Optional[str] = None
-) -> Tuple[bool, Optional[str]]:
-    """
-    统一版本检查：程序版本 + 配置文件版本
-
-    Args:
-        version_url: 远程程序版本检查 URL
-        configs_version_url: 远程配置文件版本检查 URL (返回格式: filename=version)
-        proxy_url: 代理 URL
-
-    Returns:
-        (need_update, remote_version): 程序是否需要更新及远程版本号
-    """
-    # 获取远程版本
-    remote_version = _fetch_remote_version(version_url, proxy_url)
-
-    # 获取远程配置版本（如果有提供 URL）
-    remote_config_versions = {}
-    if configs_version_url:
-        content = _fetch_remote_version(configs_version_url, proxy_url)
-        if content:
-            remote_config_versions = _parse_config_versions(content)
-
-    print("=" * 60)
-    print("版本检查")
-    print("=" * 60)
-
-    if remote_version:
-        print(f"远程程序版本: {remote_version}")
-    else:
-        print("远程程序版本: 获取失败")
-
-    if configs_version_url:
-        if remote_config_versions:
-            print(f"远程配置清单: 获取成功 ({len(remote_config_versions)} 个文件)")
-        else:
-            print("远程配置清单: 获取失败或为空")
-
-    print("-" * 60)
-
-    program_status = _compare_version(__version__, remote_version) if remote_version else "(无法比较)"
-    print(f"  主程序版本: {__version__} {program_status}")
-
-    config_files = [
-        Path("config/config.yaml"),
-        Path("config/timeline.yaml"),
-        Path("config/frequency_words.txt"),
-        Path("config/ai_interests.txt"),
-        Path("config/ai_analysis_prompt.txt"),
-        Path("config/ai_translation_prompt.txt"),
-    ]
-
-    version_pattern = re.compile(r"Version:\s*(\d+\.\d+\.\d+)", re.IGNORECASE)
-
-    for config_file in config_files:
-        if not config_file.exists():
-            print(f"  {config_file.name}: 文件不存在")
-            continue
-
-        try:
-            with open(config_file, "r", encoding="utf-8") as f:
-                local_version = None
-                for i, line in enumerate(f):
-                    if i >= 20:
-                        break
-                    match = version_pattern.search(line)
-                    if match:
-                        local_version = match.group(1)
-                        break
-
-                # 获取该文件的远程版本
-                target_remote_version = remote_config_versions.get(config_file.name)
-
-                if local_version:
-                    if target_remote_version:
-                        status = _compare_version(local_version, target_remote_version)
-                        print(f"  {config_file.name}: {local_version} {status}")
-                    else:
-                        print(f"  {config_file.name}: {local_version} (未找到远程版本)")
-                else:
-                    print(f"  {config_file.name}: 未找到本地版本号")
-        except Exception as e:
-            print(f"  {config_file.name}: 读取失败 - {e}")
-
-    print("=" * 60)
-
-    # 返回程序版本的更新状态
-    if remote_version:
-        need_update = _parse_version(__version__) < _parse_version(remote_version)
-        return need_update, remote_version if need_update else None
-    return False, None
 
 
 # === 主分析器 ===
@@ -237,7 +75,17 @@ class NewsAnalyzer:
         self.update_info = None
         self.proxy_url = None
         self._setup_proxy()
-        self.data_fetcher = DataFetcher(self.proxy_url)
+        self.data_fetcher = DataFetcher(
+            self.proxy_url,
+            api_url=self.ctx.config.get("PLATFORMS_API_URL") or None,
+        )
+
+        # RSS/平台元数据（用于报告头部展示）
+        self._rss_source_total = 0
+        self._rss_source_failed = 0
+        self._rss_total_count = 0
+        self._rss_matched_count = 0
+        self._hotlist_total_count = 0
 
         # 初始化存储管理器（使用 AppContext）
         self._init_storage_manager()
@@ -540,14 +388,22 @@ class NewsAnalyzer:
             else:
                 ai_report_type = report_type
 
+            # 独立 AI 模式（ai_mode != 推送 mode）下，rss_items/standalone_data 仍是推送 mode 的数据，
+            # 与 ai_mode 的热榜 ai_stats 不同源。为避免时间窗错配的数据误导分析，独立模式下不向 AI
+            # 传入 RSS/独立展示区，使其专注于 ai_mode 的热榜分析（同 mode 时正常传入）。
+            ai_rss_stats = rss_items if ai_mode == mode else None
+            ai_standalone = standalone_data if ai_mode == mode else None
+            if ai_mode != mode and (rss_items or standalone_data):
+                print(f"[AI] 独立分析模式（{ai_mode}）：RSS/独立展示区与推送模式（{mode}）不同源，本次分析仅聚焦热榜")
+
             result = analyzer.analyze(
                 stats=ai_stats,
-                rss_stats=rss_items,
+                rss_stats=ai_rss_stats,
                 report_mode=ai_mode,
                 report_type=ai_report_type,
                 platforms=platforms,
                 keywords=keywords,
-                standalone_data=standalone_data,
+                standalone_data=ai_standalone,
             )
 
             # 设置 AI 分析使用的模式
@@ -810,7 +666,7 @@ class NewsAnalyzer:
         standalone_data: Optional[Dict] = None,
         schedule: ResolvedSchedule = None,
         rss_new_urls: Optional[set] = None,
-    ) -> Tuple[List[Dict], Optional[str], Optional[AIAnalysisResult], Optional[List[Dict]]]:
+    ) -> Tuple[List[Dict], Optional[str], Optional[AIAnalysisResult], Optional[List[Dict]], Optional[Dict], Optional[List[Dict]]]:
         """统一的分析流水线：数据处理 → 统计计算（关键词/AI筛选）→ AI分析 → HTML生成"""
 
         # 根据筛选策略选择数据处理方式
@@ -822,15 +678,16 @@ class NewsAnalyzer:
             if ai_filter_result and ai_filter_result.success:
                 print(f"[筛选] AI 筛选完成: {ai_filter_result.total_matched} 条匹配, {len(ai_filter_result.tags)} 个标签")
                 # 转换为与关键词匹配相同的数据结构
-                stats, ai_rss_stats = self.ctx.convert_ai_filter_to_report_data(
+                stats, ai_rss_stats, ai_rss_new_stats = self.ctx.convert_ai_filter_to_report_data(
                     ai_filter_result, mode=mode,
                     new_titles=new_titles, rss_new_urls=rss_new_urls,
                 )
                 total_titles = sum(len(titles) for titles in data_source.values())
 
-                # AI 筛选的 RSS 结果替换关键词匹配的 RSS 结果
-                if ai_rss_stats:
-                    rss_items = ai_rss_stats
+                # AI 筛选成功：无条件用 AI 结果替换 RSS 主区与新增区（与热榜 stats 一致，
+                # 不因 AI 命中为空而回退到关键词结果）
+                rss_items = ai_rss_stats
+                rss_new_items = ai_rss_new_stats
             else:
                 # AI 筛选失败，回退到关键词匹配
                 error_msg = ai_filter_result.error if ai_filter_result else "未知错误"
@@ -847,6 +704,8 @@ class NewsAnalyzer:
                 id_to_name, title_info, new_titles,
                 mode=mode, global_filters=global_filters, quiet=quiet,
             )
+
+        self._hotlist_total_count = total_titles
 
         # 如果是 platform 模式，转换数据结构
         if self.ctx.display_mode == "platform" and stats:
@@ -869,20 +728,34 @@ class NewsAnalyzer:
                 standalone_data=standalone_data
             )
 
-        # 翻译 RSS 内容（如果启用）— 在 HTML 生成前执行，确保网页版也能展示翻译内容
-        # 注意：仅翻译 rss_items 和 rss_new_items，不翻译 standalone_data（通知前会重新生成）
+        # 翻译 RSS 和独立展示区内容（如果启用）— 在 HTML 生成前执行，确保网页版也能展示翻译内容
+        # standalone_data 在此翻译一次后贯穿到推送阶段复用，避免重复翻译并保证网页与推送译文一致
         # 热榜翻译在推送时由 dispatch_all 处理 report_data
         trans_config = self.ctx.config.get("AI_TRANSLATION", {})
+        translate_report_func = None  # 供 HTML 翻译热榜 report_data（在过滤之后翻译）
         if trans_config.get("ENABLED", False):
             dispatcher = self.ctx.create_notification_dispatcher()
             display_regions = self.ctx.config.get("DISPLAY", {}).get("REGIONS", {})
-            _, rss_items, rss_new_items, _ = \
+            _, rss_items, rss_new_items, standalone_data = \
                 dispatcher.translate_content(
                     report_data={"stats": [], "new_titles": []},
                     rss_items=rss_items,
                     rss_new_items=rss_new_items,
+                    standalone_data=standalone_data,
                     display_regions=display_regions,
                 )
+
+            # 热榜 report_data 翻译回调：HTML 在 prepare_report_data 过滤之后调用，
+            # 仅翻译热榜（skip_rss/skip_standalone 跳过已在上游翻译的 RSS/独立区），网页版热榜展示译文
+            def translate_report_func(rd, _d=dispatcher, _r=display_regions):
+                translated_rd, _, _, _ = _d.translate_content(
+                    report_data=rd, display_regions=_r,
+                    skip_rss=True, skip_standalone=True,
+                )
+                return translated_rd
+
+        # 计算 RSS 匹配条数（供 HTML 和推送共用）
+        self._rss_matched_count = sum(stat.get("count", 0) for stat in rss_items) if rss_items else 0
 
         # HTML生成（如果启用）— 使用翻译后的数据
         html_file = None
@@ -903,9 +776,18 @@ class NewsAnalyzer:
                 ai_analysis=html_ai,
                 standalone_data=html_standalone,
                 frequency_file=self.frequency_file,
+                report_metadata={
+                    "hotlist_total": total_titles,
+                    "platform_total": len(self.ctx.platform_ids),
+                    "rss_matched_count": self._rss_matched_count,
+                    "rss_total_count": self._rss_total_count,
+                    "rss_source_total": self._rss_source_total,
+                    "rss_source_failed": self._rss_source_failed,
+                },
+                translate_report_func=translate_report_func,
             )
 
-        return stats, html_file, ai_result, rss_items
+        return stats, html_file, ai_result, rss_items, standalone_data, rss_new_items
 
     def _send_notification_if_needed(
         self,
@@ -970,11 +852,20 @@ class NewsAnalyzer:
                 if ai_config.get("ENABLED", False):
                     ai_result = self._run_ai_analysis(
                         stats, rss_items, mode, report_type, id_to_name,
-                        current_results=current_results, schedule=schedule
+                        current_results=current_results, schedule=schedule,
+                        standalone_data=standalone_data,
                     )
 
             # 准备报告数据
             report_data = self.ctx.prepare_report(stats, failed_ids, new_titles, id_to_name, mode, frequency_file=self.frequency_file)
+
+            # 注入元数据（用于推送头部展示）
+            report_data["hotlist_total"] = self._hotlist_total_count
+            report_data["platform_total"] = len(self.ctx.platform_ids)
+            report_data["rss_matched_count"] = self._rss_matched_count
+            report_data["rss_total_count"] = self._rss_total_count
+            report_data["rss_source_total"] = self._rss_source_total
+            report_data["rss_source_failed"] = self._rss_source_failed
 
             # 是否发送版本更新信息
             update_info_to_send = self.update_info if cfg["SHOW_VERSION_UPDATE"] else None
@@ -1056,11 +947,15 @@ class NewsAnalyzer:
     def _crawl_data(self) -> Tuple[Dict, Dict, List]:
         """执行数据爬取"""
         ids = []
+        domain_rules = {}
         for platform in self.ctx.platforms:
             if "name" in platform:
                 ids.append((platform["id"], platform["name"]))
             else:
                 ids.append(platform["id"])
+            expected_domain = platform.get("expected_domain", "")
+            if expected_domain:
+                domain_rules[platform["id"]] = expected_domain
 
         print(
             f"配置的监控平台: {[p.get('name', p['id']) for p in self.ctx.platforms]}"
@@ -1069,7 +964,7 @@ class NewsAnalyzer:
         Path("output").mkdir(parents=True, exist_ok=True)
 
         results, id_to_name, failed_ids = self.data_fetcher.crawl_websites(
-            ids, self.request_interval
+            ids, self.request_interval, domain_rules=domain_rules
         )
 
         # 转换为 NewsData 格式并保存到存储后端
@@ -1170,6 +1065,9 @@ class NewsAnalyzer:
 
             # 抓取数据
             rss_data = fetcher.fetch_all()
+
+            self._rss_source_total = len(feeds)
+            self._rss_source_failed = len(rss_data.failed_ids)
 
             # 保存到存储后端
             if self.storage_manager.save_rss_data(rss_data):
@@ -1359,6 +1257,7 @@ class NewsAnalyzer:
                     quiet=True,
                 )
 
+        self._rss_total_count = total
         return rss_stats, rss_new_stats, raw_rss_items, rss_new_urls
 
     def _convert_rss_items_to_list(self, items_dict: Dict, id_to_name: Dict) -> List[Dict]:
@@ -1537,6 +1436,7 @@ class NewsAnalyzer:
         stats = []
         ai_result = None
         title_info = None
+        standalone_data = None
 
         # current 模式需要使用完整的历史数据
         if self.report_mode == "current":
@@ -1561,7 +1461,7 @@ class NewsAnalyzer:
                     all_results, historical_id_to_name, historical_title_info, raw_rss_items
                 )
 
-                stats, html_file, ai_result, rss_items = self._run_analysis_pipeline(
+                stats, html_file, ai_result, rss_items, standalone_data, rss_new_items = self._run_analysis_pipeline(
                     all_results,
                     self.report_mode,
                     historical_title_info,
@@ -1605,7 +1505,7 @@ class NewsAnalyzer:
                     all_results, historical_id_to_name, historical_title_info, raw_rss_items
                 )
 
-                stats, html_file, ai_result, rss_items = self._run_analysis_pipeline(
+                stats, html_file, ai_result, rss_items, standalone_data, rss_new_items = self._run_analysis_pipeline(
                     all_results,
                     self.report_mode,
                     historical_title_info,
@@ -1633,7 +1533,7 @@ class NewsAnalyzer:
                 standalone_data = self._prepare_standalone_data(
                     results, id_to_name, title_info, raw_rss_items
                 )
-                stats, html_file, ai_result, rss_items = self._run_analysis_pipeline(
+                stats, html_file, ai_result, rss_items, standalone_data, rss_new_items = self._run_analysis_pipeline(
                     results,
                     self.report_mode,
                     title_info,
@@ -1655,7 +1555,7 @@ class NewsAnalyzer:
             standalone_data = self._prepare_standalone_data(
                 results, id_to_name, title_info, raw_rss_items
             )
-            stats, html_file, ai_result, rss_items = self._run_analysis_pipeline(
+            stats, html_file, ai_result, rss_items, standalone_data, rss_new_items = self._run_analysis_pipeline(
                 results,
                 self.report_mode,
                 title_info,
@@ -1678,9 +1578,8 @@ class NewsAnalyzer:
 
         # 发送通知
         if mode_strategy["should_send_notification"]:
-            standalone_data = self._prepare_standalone_data(
-                results, id_to_name, title_info, raw_rss_items
-            )
+            # standalone_data 已在分析流水线中翻译，直接复用（不再重新 prepare 原文，
+            # 避免覆盖译文、避免重复翻译，并保证网页报告与推送译文一致）
             self._send_notification_if_needed(
                 stats,
                 mode_strategy["report_type"],
@@ -1737,412 +1636,8 @@ class NewsAnalyzer:
             self.ctx.cleanup()
 
 
-def _record_doctor_result(results: List[Tuple[str, str, str]], status: str, item: str, detail: str) -> None:
-    """记录并打印 doctor 检查结果"""
-    icon_map = {
-        "pass": "✅",
-        "warn": "⚠️",
-        "fail": "❌",
-    }
-    icon = icon_map.get(status, "•")
-    results.append((status, item, detail))
-    print(f"{icon} {item}: {detail}")
-
-
-def _save_doctor_report(
-    results: List[Tuple[str, str, str]],
-    pass_count: int,
-    warn_count: int,
-    fail_count: int,
-    config_path: Optional[str],
-) -> None:
-    """保存 doctor 体检报告到 JSON 文件"""
-    report = {
-        "version": __version__,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "config_path": config_path or os.environ.get("CONFIG_PATH", "config/config.yaml"),
-        "summary": {
-            "pass": pass_count,
-            "warn": warn_count,
-            "fail": fail_count,
-            "ok": fail_count == 0,
-        },
-        "checks": [
-            {"status": status, "item": item, "detail": detail}
-            for status, item, detail in results
-        ],
-    }
-
-    try:
-        output_dir = Path("output") / "meta"
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = output_dir / "doctor_report.json"
-        output_path.write_text(
-            json.dumps(report, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        print(f"体检报告已保存: {output_path}")
-    except Exception as e:
-        print(f"⚠️ 体检报告保存失败: {e}")
-
-
-def _run_doctor(config_path: Optional[str] = None) -> bool:
-    """运行环境体检"""
-    print("=" * 60)
-    print(f"TrendRadar v{__version__} 环境体检")
-    print("=" * 60)
-
-    results: List[Tuple[str, str, str]] = []
-    config = None
-
-    # 1) Python 版本检查
-    py_ok = sys.version_info >= (3, 10)
-    py_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-    if py_ok:
-        _record_doctor_result(results, "pass", "Python版本", f"{py_version} (满足 >= 3.10)")
-    else:
-        _record_doctor_result(results, "fail", "Python版本", f"{py_version} (不满足 >= 3.10)")
-
-    # 2) 关键文件检查
-    if config_path is None:
-        config_path = os.environ.get("CONFIG_PATH", "config/config.yaml")
-
-    required_files = [
-        (config_path, "主配置文件"),
-        ("config/frequency_words.txt", "关键词文件"),
-    ]
-    optional_files = [
-        ("config/timeline.yaml", "调度文件"),
-    ]
-
-    for path_str, desc in required_files:
-        if Path(path_str).exists():
-            _record_doctor_result(results, "pass", desc, f"已找到: {path_str}")
-        else:
-            _record_doctor_result(results, "fail", desc, f"缺失: {path_str}")
-
-    for path_str, desc in optional_files:
-        if Path(path_str).exists():
-            _record_doctor_result(results, "pass", desc, f"已找到: {path_str}")
-        else:
-            _record_doctor_result(results, "warn", desc, f"未找到: {path_str}（将使用默认调度模板）")
-
-    # 3) 配置加载检查
-    try:
-        config = load_config(config_path)
-        _record_doctor_result(results, "pass", "配置加载", f"加载成功: {config_path}")
-    except Exception as e:
-        _record_doctor_result(results, "fail", "配置加载", f"加载失败: {e}")
-
-    # 后续检查依赖配置对象
-    if config:
-        # 4) 调度配置检查
-        try:
-            ctx = AppContext(config)
-            schedule = ctx.create_scheduler().resolve()
-            detail = f"调度解析成功（report_mode={schedule.report_mode}, ai_mode={schedule.ai_mode}）"
-            _record_doctor_result(results, "pass", "调度配置", detail)
-        except Exception as e:
-            _record_doctor_result(results, "fail", "调度配置", f"解析失败: {e}")
-
-        # 5) AI 配置检查（按功能场景区分严重级别）
-        ai_analysis_enabled = config.get("AI_ANALYSIS", {}).get("ENABLED", False)
-        ai_translation_enabled = config.get("AI_TRANSLATION", {}).get("ENABLED", False)
-        ai_filter_enabled = config.get("FILTER", {}).get("METHOD", "keyword") == "ai"
-        ai_enabled = ai_analysis_enabled or ai_translation_enabled or ai_filter_enabled
-
-        if ai_enabled:
-            try:
-                from trendradar.ai.client import AIClient
-                valid, message = AIClient(config.get("AI", {})).validate_config()
-                if valid:
-                    _record_doctor_result(results, "pass", "AI配置", f"模型: {config.get('AI', {}).get('MODEL', '')}")
-                else:
-                    # AI 分析/翻译是硬依赖；AI 筛选缺失时会自动回退关键词匹配
-                    if ai_analysis_enabled or ai_translation_enabled:
-                        _record_doctor_result(results, "fail", "AI配置", message)
-                    else:
-                        _record_doctor_result(results, "warn", "AI配置", f"{message}（AI 筛选将回退关键词模式）")
-            except Exception as e:
-                _record_doctor_result(results, "fail", "AI配置", f"校验异常: {e}")
-        else:
-            _record_doctor_result(results, "warn", "AI配置", "未启用 AI 功能，跳过校验")
-
-        # 6) 存储配置检查
-        try:
-            storage_cfg = config.get("STORAGE", {})
-            backend = storage_cfg.get("BACKEND", "auto")
-            remote = storage_cfg.get("REMOTE", {})
-            missing_remote_keys = [
-                k for k in ("BUCKET_NAME", "ACCESS_KEY_ID", "SECRET_ACCESS_KEY", "ENDPOINT_URL")
-                if not remote.get(k)
-            ]
-
-            if backend == "remote" and missing_remote_keys:
-                _record_doctor_result(
-                    results, "fail", "存储配置",
-                    f"remote 模式缺少配置: {', '.join(missing_remote_keys)}"
-                )
-            elif backend == "auto" and os.environ.get("GITHUB_ACTIONS") == "true" and missing_remote_keys:
-                _record_doctor_result(
-                    results, "warn", "存储配置",
-                    "GitHub Actions + auto 模式未完整配置远程存储，可能导致数据丢失"
-                )
-            else:
-                sm = AppContext(config).get_storage_manager()
-                _record_doctor_result(results, "pass", "存储配置", f"当前后端: {sm.backend_name}")
-        except Exception as e:
-            _record_doctor_result(results, "fail", "存储配置", f"检查失败: {e}")
-
-        # 7) 通知渠道配置检查
-        channel_details = []
-        channel_issues = []
-        max_accounts = config.get("MAX_ACCOUNTS_PER_CHANNEL", 3)
-
-        # 普通单值/多值渠道
-        for key, name in [
-            ("FEISHU_WEBHOOK_URL", "飞书"),
-            ("DINGTALK_WEBHOOK_URL", "钉钉"),
-            ("WEWORK_WEBHOOK_URL", "企业微信"),
-            ("BARK_URL", "Bark"),
-            ("SLACK_WEBHOOK_URL", "Slack"),
-            ("GENERIC_WEBHOOK_URL", "通用Webhook"),
-        ]:
-            values = parse_multi_account_config(config.get(key, ""))
-            if values:
-                channel_details.append(f"{name}({min(len(values), max_accounts)}个)")
-
-        # Telegram 配对校验
-        tg_tokens = parse_multi_account_config(config.get("TELEGRAM_BOT_TOKEN", ""))
-        tg_chats = parse_multi_account_config(config.get("TELEGRAM_CHAT_ID", ""))
-        if tg_tokens or tg_chats:
-            valid, count = validate_paired_configs(
-                {"bot_token": tg_tokens, "chat_id": tg_chats},
-                "Telegram",
-                required_keys=["bot_token", "chat_id"],
-            )
-            if valid and count > 0:
-                channel_details.append(f"Telegram({min(count, max_accounts)}个)")
-            else:
-                channel_issues.append("Telegram bot_token/chat_id 配置不完整或数量不一致")
-
-        # ntfy 配对校验（token 可选）
-        ntfy_server = config.get("NTFY_SERVER_URL", "")
-        ntfy_topics = parse_multi_account_config(config.get("NTFY_TOPIC", ""))
-        ntfy_tokens = parse_multi_account_config(config.get("NTFY_TOKEN", ""))
-        if ntfy_server and ntfy_topics:
-            if ntfy_tokens:
-                valid, count = validate_paired_configs(
-                    {"topic": ntfy_topics, "token": ntfy_tokens},
-                    "ntfy",
-                )
-                if valid and count > 0:
-                    channel_details.append(f"ntfy({min(count, max_accounts)}个)")
-                else:
-                    channel_issues.append("ntfy topic/token 数量不一致")
-            else:
-                channel_details.append(f"ntfy({min(len(ntfy_topics), max_accounts)}个)")
-
-        # 邮件配置完整性
-        email_ready = all(
-            [
-                config.get("EMAIL_FROM"),
-                config.get("EMAIL_PASSWORD"),
-                config.get("EMAIL_TO"),
-            ]
-        )
-        if email_ready:
-            channel_details.append("邮件")
-        elif any([config.get("EMAIL_FROM"), config.get("EMAIL_PASSWORD"), config.get("EMAIL_TO")]):
-            channel_issues.append("邮件配置不完整（需要 from/password/to 同时配置）")
-
-        if channel_issues and not channel_details:
-            _record_doctor_result(results, "fail", "通知配置", "；".join(channel_issues))
-        elif channel_issues and channel_details:
-            detail = f"可用渠道: {', '.join(channel_details)}；问题: {'；'.join(channel_issues)}"
-            _record_doctor_result(results, "warn", "通知配置", detail)
-        elif channel_details:
-            _record_doctor_result(results, "pass", "通知配置", f"可用渠道: {', '.join(channel_details)}")
-        else:
-            _record_doctor_result(results, "warn", "通知配置", "未配置任何通知渠道")
-
-        # 8) 输出目录可写检查
-        try:
-            output_dir = Path("output")
-            output_dir.mkdir(parents=True, exist_ok=True)
-            probe_file = output_dir / ".doctor_write_probe"
-            probe_file.write_text("ok", encoding="utf-8")
-            probe_file.unlink(missing_ok=True)
-            _record_doctor_result(results, "pass", "输出目录", f"可写: {output_dir}")
-        except Exception as e:
-            _record_doctor_result(results, "fail", "输出目录", f"不可写: {e}")
-
-    pass_count = sum(1 for status, _, _ in results if status == "pass")
-    warn_count = sum(1 for status, _, _ in results if status == "warn")
-    fail_count = sum(1 for status, _, _ in results if status == "fail")
-
-    _save_doctor_report(results, pass_count, warn_count, fail_count, config_path)
-
-    print("-" * 60)
-    print(f"体检结果: ✅ {pass_count} 项通过  ⚠️ {warn_count} 项警告  ❌ {fail_count} 项失败")
-    print("=" * 60)
-
-    if fail_count == 0:
-        print("体检通过。")
-        return True
-
-    print("体检未通过，请先修复失败项。")
-    return False
-
-
-def _build_test_report_data(ctx: AppContext) -> Dict:
-    """构造通知测试用报告数据"""
-    now = ctx.get_time()
-    time_display = now.strftime("%H:%M")
-    title = f"TrendRadar 通知测试消息（{now.strftime('%Y-%m-%d %H:%M:%S')}）"
-
-    return {
-        "stats": [
-            {
-                "word": "连通性测试",
-                "count": 1,
-                "titles": [
-                    {
-                        "title": title,
-                        "source_name": "TrendRadar",
-                        "url": "https://github.com/sansan0/TrendRadar",
-                        "mobile_url": "",
-                        "ranks": [1],
-                        "rank_threshold": ctx.rank_threshold,
-                        "count": 1,
-                        "is_new": True,
-                        "time_display": time_display,
-                        "matched_keyword": "连通性测试",
-                    }
-                ],
-            }
-        ],
-        "failed_ids": [],
-        "new_titles": [],
-        "id_to_name": {},
-    }
-
-
-def _create_test_html_file(ctx: AppContext) -> Optional[str]:
-    """创建邮件测试用 HTML 文件"""
-    try:
-        now = ctx.get_time()
-        output_dir = Path("output") / "html" / ctx.format_date()
-        output_dir.mkdir(parents=True, exist_ok=True)
-        html_path = output_dir / f"notification_test_{ctx.format_time()}.html"
-        html_content = f"""<!DOCTYPE html>
-<html lang="zh-CN">
-<head><meta charset="UTF-8"><title>TrendRadar 通知测试</title></head>
-<body>
-<h2>TrendRadar 通知连通性测试</h2>
-<p>测试时间：{now.strftime('%Y-%m-%d %H:%M:%S')} ({ctx.timezone})</p>
-<p>这是一条测试消息，用于验证邮件渠道是否可达。</p>
-</body>
-</html>"""
-        html_path.write_text(html_content, encoding="utf-8")
-        return str(html_path)
-    except Exception as e:
-        print(f"[测试通知] 创建测试 HTML 失败: {e}")
-        return None
-
-
-def _run_test_notification(config: Dict) -> bool:
-    """发送测试通知到已配置渠道"""
-    from trendradar.notification import NotificationDispatcher
-
-    ctx = AppContext(config)
-
-    try:
-        # 检查是否配置了通知渠道
-        has_notification = any(
-            [
-                config.get("FEISHU_WEBHOOK_URL"),
-                config.get("DINGTALK_WEBHOOK_URL"),
-                config.get("WEWORK_WEBHOOK_URL"),
-                (config.get("TELEGRAM_BOT_TOKEN") and config.get("TELEGRAM_CHAT_ID")),
-                (config.get("EMAIL_FROM") and config.get("EMAIL_PASSWORD") and config.get("EMAIL_TO")),
-                (config.get("NTFY_SERVER_URL") and config.get("NTFY_TOPIC")),
-                config.get("BARK_URL"),
-                config.get("SLACK_WEBHOOK_URL"),
-                config.get("GENERIC_WEBHOOK_URL"),
-            ]
-        )
-        if not has_notification:
-            print("未检测到可用通知渠道，请先在 config.yaml 或环境变量中配置。")
-            return False
-
-        # 测试时固定展示区域，避免用户关闭 HOTLIST 导致测试内容为空
-        test_config = copy.deepcopy(config)
-        test_display = test_config.setdefault("DISPLAY", {})
-        test_regions = test_display.setdefault("REGIONS", {})
-        test_regions.update(
-            {
-                "HOTLIST": True,
-                "NEW_ITEMS": False,
-                "RSS": False,
-                "STANDALONE": False,
-                "AI_ANALYSIS": False,
-            }
-        )
-
-        # 测试时禁用翻译，避免触发额外 AI 调用
-        if "AI_TRANSLATION" in test_config:
-            test_config["AI_TRANSLATION"]["ENABLED"] = False
-
-        proxy_url = test_config.get("DEFAULT_PROXY", "") if test_config.get("USE_PROXY") else None
-        if proxy_url:
-            print("[测试通知] 检测到代理配置，将使用代理发送")
-
-        dispatcher = NotificationDispatcher(
-            config=test_config,
-            get_time_func=ctx.get_time,
-            split_content_func=ctx.split_content,
-            translator=None,
-        )
-
-        report_data = _build_test_report_data(ctx)
-        html_file_path = _create_test_html_file(ctx)
-
-        print("=" * 60)
-        print("通知连通性测试")
-        print("=" * 60)
-
-        results = dispatcher.dispatch_all(
-            report_data=report_data,
-            report_type="通知连通性测试",
-            proxy_url=proxy_url,
-            mode="daily",
-            html_file_path=html_file_path,
-        )
-
-        if not results:
-            print("没有可测试的有效通知渠道（可能配置不完整）。")
-            return False
-
-        print("-" * 60)
-        success_count = 0
-        for channel, ok in results.items():
-            if ok:
-                success_count += 1
-                print(f"✅ {channel}: 测试成功")
-            else:
-                print(f"❌ {channel}: 测试失败")
-
-        print("-" * 60)
-        print(f"测试结果: {success_count}/{len(results)} 个渠道成功")
-        return success_count > 0
-    finally:
-        ctx.cleanup()
-
-
 def main():
     """主程序入口"""
-    # 解析命令行参数
     parser = argparse.ArgumentParser(
         description="TrendRadar - 热点新闻聚合与分析工具",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -2160,44 +1655,28 @@ def main():
   python -m trendradar --test-notification # 测试通知渠道连通性
 """
     )
-    parser.add_argument(
-        "--show-schedule",
-        action="store_true",
-        help="显示当前调度状态"
-    )
-    parser.add_argument(
-        "--doctor",
-        action="store_true",
-        help="运行环境与配置体检"
-    )
-    parser.add_argument(
-        "--test-notification",
-        action="store_true",
-        help="发送测试通知到已配置渠道"
-    )
+    parser.add_argument("--show-schedule", action="store_true", help="显示当前调度状态")
+    parser.add_argument("--doctor", action="store_true", help="运行环境与配置体检")
+    parser.add_argument("--test-notification", action="store_true", help="发送测试通知到已配置渠道")
 
     args = parser.parse_args()
 
     debug_mode = False
     try:
-        # 处理 doctor 命令（不依赖完整运行流程）
         if args.doctor:
-            ok = _run_doctor()
+            ok = run_doctor()
             if not ok:
                 raise SystemExit(1)
             return
 
-        # 先加载配置
         config = load_config()
 
-        # 处理状态查看命令
         if args.show_schedule:
-            _handle_status_commands(config)
+            handle_status_commands(config)
             return
 
-        # 处理通知测试命令
         if args.test_notification:
-            ok = _run_test_notification(config)
+            ok = run_test_notification(config)
             if not ok:
                 raise SystemExit(1)
             return
@@ -2205,23 +1684,19 @@ def main():
         version_url = config.get("VERSION_CHECK_URL", "")
         configs_version_url = config.get("CONFIGS_VERSION_CHECK_URL", "")
 
-        # 统一版本检查（程序版本 + 配置文件版本，只请求一次远程）
         need_update = False
         remote_version = None
         if version_url:
             need_update, remote_version = check_all_versions(version_url, configs_version_url)
 
-        # 复用已加载的配置，避免重复加载
         analyzer = NewsAnalyzer(config=config)
 
-        # 设置更新信息（复用已获取的远程版本，不再重复请求）
         if analyzer.is_github_actions and need_update and remote_version:
             analyzer.update_info = {
                 "current_version": __version__,
                 "remote_version": remote_version,
             }
 
-        # 获取 debug 配置
         debug_mode = analyzer.ctx.config.get("DEBUG", False)
         analyzer.run()
     except FileNotFoundError as e:
@@ -2234,62 +1709,6 @@ def main():
         print(f"❌ 程序运行错误: {e}")
         if debug_mode:
             raise
-
-
-def _handle_status_commands(config: Dict) -> None:
-    """处理状态查看命令 - 显示当前调度状态"""
-    from trendradar.context import AppContext
-
-    ctx = AppContext(config)
-
-    print("=" * 60)
-    print(f"TrendRadar v{__version__} 调度状态")
-    print("=" * 60)
-
-    try:
-        scheduler = ctx.create_scheduler()
-        schedule = scheduler.resolve()
-
-        now = ctx.get_time()
-        date_str = ctx.format_date()
-
-        print(f"\n⏰ 当前时间: {now.strftime('%Y-%m-%d %H:%M:%S')} ({ctx.timezone})")
-        print(f"📅 当前日期: {date_str}")
-
-        print(f"\n📋 调度信息:")
-        print(f"  日计划: {schedule.day_plan}")
-        if schedule.period_key:
-            print(f"  当前时间段: {schedule.period_name or schedule.period_key} ({schedule.period_key})")
-        else:
-            print(f"  当前时间段: 无（使用默认配置）")
-
-        print(f"\n🔧 行为开关:")
-        print(f"  采集数据: {'✅ 是' if schedule.collect else '❌ 否'}")
-        print(f"  AI 分析:  {'✅ 是' if schedule.analyze else '❌ 否'}")
-        print(f"  推送通知: {'✅ 是' if schedule.push else '❌ 否'}")
-        print(f"  报告模式: {schedule.report_mode}")
-        print(f"  AI 模式:  {schedule.ai_mode}")
-
-        if schedule.period_key:
-            print(f"\n🔁 一次性控制:")
-            if schedule.once_analyze:
-                already_analyzed = scheduler.already_executed(schedule.period_key, "analyze", date_str)
-                print(f"  AI 分析:  仅一次 {'(今日已执行 ⚠️)' if already_analyzed else '(今日未执行 ✅)'}")
-            else:
-                print(f"  AI 分析:  不限次数")
-            if schedule.once_push:
-                already_pushed = scheduler.already_executed(schedule.period_key, "push", date_str)
-                print(f"  推送通知: 仅一次 {'(今日已执行 ⚠️)' if already_pushed else '(今日未执行 ✅)'}")
-            else:
-                print(f"  推送通知: 不限次数")
-
-    except Exception as e:
-        print(f"\n❌ 获取调度状态失败: {e}")
-
-    print("\n" + "=" * 60)
-
-    # 清理资源
-    ctx.cleanup()
 
 
 if __name__ == "__main__":

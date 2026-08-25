@@ -45,7 +45,8 @@ def format_title_for_platform(
         格式化后的标题字符串
     """
     rank_display = format_rank_display(
-        title_data["ranks"], title_data["rank_threshold"], platform
+        title_data["ranks"], title_data["rank_threshold"], platform,
+        rank_timeline=title_data.get("rank_timeline"),
     )
 
     link_url = title_data["mobile_url"] or title_data["url"]
@@ -65,9 +66,9 @@ def format_title_for_platform(
         title_prefix = "🆕 " if title_data.get("is_new") else ""
 
         if show_source:
-            result = f"<font color='grey'>[{title_data['source_name']}]</font> {title_prefix}{formatted_title}"
+            result = f"<font color='grey'>&#91;{title_data['source_name']}&#93;</font> {title_prefix}{formatted_title}"
         elif show_keyword and keyword:
-            result = f"<font color='blue'>[{keyword}]</font> {title_prefix}{formatted_title}"
+            result = f"<font color='blue'>&#91;{keyword}&#93;</font> {title_prefix}{formatted_title}"
         else:
             result = f"{title_prefix}{formatted_title}"
 
@@ -196,7 +197,8 @@ def format_title_for_platform(
 
         # 排名（使用 * 加粗）
         rank_display = format_rank_display(
-            title_data["ranks"], title_data["rank_threshold"], "slack"
+            title_data["ranks"], title_data["rank_threshold"], "slack",
+            rank_timeline=title_data.get("rank_timeline"),
         )
         if rank_display:
             result += f" {rank_display}"
@@ -209,7 +211,8 @@ def format_title_for_platform(
 
     elif platform == "html":
         rank_display = format_rank_display(
-            title_data["ranks"], title_data["rank_threshold"], "html"
+            title_data["ranks"], title_data["rank_threshold"], "html",
+            rank_timeline=title_data.get("rank_timeline"),
         )
 
         link_url = title_data["mobile_url"] or title_data["url"]

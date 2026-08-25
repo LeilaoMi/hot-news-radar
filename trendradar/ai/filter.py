@@ -312,7 +312,7 @@ class AIFilter:
         titles: List[Dict],
         tags: List[Dict],
         interests_content: str = "",
-    ) -> List[Dict]:
+    ) -> Optional[List[Dict]]:
         """
         阶段 B：对一批新闻标题做分类
 
@@ -322,14 +322,15 @@ class AIFilter:
             interests_content: 用户的兴趣描述（含质量过滤要求）
 
         Returns:
-            [{"news_item_id": int, "tag_id": int, "relevance_score": float}, ...]
+            成功返回 [{"news_item_id": int, "tag_id": int, "relevance_score": float}, ...]（无匹配时为空列表）；
+            调用失败返回 None（用于区分"无匹配"与"调用失败"，失败批次不标记已分析以便下次重试）
         """
         if not titles or not tags:
             return []
 
         if not self.classify_user:
             print("[AI筛选] 分类提示词模板为空")
-            return []
+            return None
 
         # 构建标签列表文本
         tags_list = "\n".join(
@@ -380,7 +381,7 @@ class AIFilter:
             return self._parse_classify_response(response, titles, tags)
         except Exception as e:
             print(f"[AI筛选] 分类请求失败: {type(e).__name__}: {e}")
-            return []
+            return None
 
     def _parse_classify_response(
         self,

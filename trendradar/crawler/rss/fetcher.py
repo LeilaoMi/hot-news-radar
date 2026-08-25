@@ -84,48 +84,6 @@ class RSSFetcher:
 
         return session
 
-    def _filter_by_freshness(
-        self,
-        items: List[RSSItem],
-        feed: RSSFeedConfig,
-    ) -> Tuple[List[RSSItem], int]:
-        """
-        根据新鲜度过滤文章
-
-        Args:
-            items: 待过滤的文章列表
-            feed: RSS 源配置
-
-        Returns:
-            (过滤后的文章列表, 被过滤的文章数)
-        """
-        # 如果全局禁用，直接返回
-        if not self.freshness_enabled:
-            return items, 0
-
-        # 确定此 feed 的 max_age_days
-        max_days = feed.max_age_days
-        if max_days is None:
-            max_days = self.default_max_age_days
-
-        # 如果设为 0，禁用此 feed 的过滤
-        if max_days == 0:
-            return items, 0
-
-        # 过滤逻辑：无发布时间的文章保留
-        filtered = []
-        for item in items:
-            if not item.published_at:
-                # 无发布时间，保留
-                filtered.append(item)
-            elif is_within_days(item.published_at, max_days, self.timezone):
-                # 在指定天数内，保留
-                filtered.append(item)
-            # 否则过滤掉
-
-        filtered_count = len(items) - len(filtered)
-        return filtered, filtered_count
-
     def fetch_feed(self, feed: RSSFeedConfig) -> Tuple[List[RSSItem], Optional[str]]:
         """
         抓取单个 RSS 源

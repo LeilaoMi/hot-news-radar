@@ -10,26 +10,12 @@ import subprocess
 import time
 import signal
 from pathlib import Path
-from datetime import datetime
 
 # Web 服务器配置
-WEBSERVER_PORT = int(os.environ.get("WEBSERVER_PORT", "8080"))
+_raw_port = int(os.environ.get("WEBSERVER_PORT", "8080"))
+WEBSERVER_PORT = _raw_port if 1 <= _raw_port <= 65535 else 8080
 WEBSERVER_DIR = "/app/output"
 WEBSERVER_PID_FILE = "/tmp/webserver.pid"
-def get_timestamp():
-    """获取当前时间戳字符串"""
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-
-def run_command(cmd, shell=True, capture_output=True):
-    """执行系统命令"""
-    try:
-        result = subprocess.run(
-            cmd, shell=shell, capture_output=capture_output, text=True
-        )
-        return result.returncode == 0, result.stdout, result.stderr
-    except Exception as e:
-        return False, "", str(e)
 
 
 def manual_run():
@@ -136,10 +122,10 @@ def show_status():
     supercronic_is_pid1 = False
     pid1_cmdline = ""
     try:
-        with open('/proc/1/cmdline', 'r') as f:
-            pid1_cmdline = f.read().replace('\x00', ' ').strip()
+        with open('/proc/1/cmdline', 'rb') as f:
+            pid1_cmdline = f.read().replace(b'\x00', b' ').decode('utf-8', errors='ignore').strip()
         print(f"  🔍 PID 1 进程: {pid1_cmdline}")
-        
+
         if "supercronic" in pid1_cmdline.lower():
             print("  ✅ supercronic 正确运行为 PID 1")
             supercronic_is_pid1 = True
@@ -191,7 +177,7 @@ def show_status():
                     with open(file_path, 'r') as f:
                         crontab_content = f.read().strip()
                         print(f"         内容: {crontab_content}")
-                except:
+                except Exception:
                     pass
         else:
             print(f"    ❌ {description}: 不存在")
@@ -311,7 +297,7 @@ def show_config():
     for var in env_vars:
         value = os.environ.get(var, "未设置")
         # 隐藏敏感信息
-        if any(sensitive in var for sensitive in ["WEBHOOK", "TOKEN", "KEY", "SECRET"]):
+        if var == "BARK_URL" or any(sensitive in var for sensitive in ["WEBHOOK", "TOKEN", "KEY", "SECRET"]):
             if value and value != "未设置":
                 masked_value = value[:10] + "***" if len(value) > 10 else "***"
                 print(f"  {var}: {masked_value}")
@@ -434,8 +420,8 @@ def restart_supercronic():
 
     # 检查当前 PID 1
     try:
-        with open('/proc/1/cmdline', 'r') as f:
-            pid1_cmdline = f.read().replace('\x00', ' ').strip()
+        with open('/proc/1/cmdline', 'rb') as f:
+            pid1_cmdline = f.read().replace(b'\x00', b' ').decode('utf-8', errors='ignore').strip()
         print(f"  🔍 当前 PID 1: {pid1_cmdline}")
 
         if "supercronic" in pid1_cmdline.lower():
@@ -511,15 +497,17 @@ def _is_webserver_running(pid: int) -> bool:
 
     try:
         import urllib.request
+        class _NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
+        opener = urllib.request.build_opener(_NoRedirect)
         req = urllib.request.Request(f"http://127.0.0.1:{WEBSERVER_PORT}/", method="HEAD")
-        urllib.request.urlopen(req, timeout=3)
+        opener.open(req, timeout=3)
         return True
     except Exception:
         try:
             time.sleep(1)
-            import urllib.request
-            req = urllib.request.Request(f"http://127.0.0.1:{WEBSERVER_PORT}/", method="HEAD")
-            urllib.request.urlopen(req, timeout=3)
+            opener.open(req, timeout=3)
             return True
         except Exception:
             return False
@@ -622,7 +610,7 @@ def stop_webserver():
         # 尝试清理 PID 文件
         try:
             os.remove(WEBSERVER_PID_FILE)
-        except:
+        except Exception:
             pass
 
 
