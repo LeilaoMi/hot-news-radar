@@ -89,9 +89,48 @@ details[open] .day-h {{ border-bottom-color:#eee; }}
 </body></html>""")
     return "\n".join(parts)
 
+
+def inject_nav(html_path: Path):
+    """向快照 HTML 顶部注入站点导航条（幂等：已有则跳过）"""
+    try:
+        s = html_path.read_text(encoding="utf-8")
+    except Exception:
+        return False
+    if "rdr-nav" in s:
+        return False
+    nav = """<div id="rdr-nav" style="position:sticky;top:0;z-index:9999;background:#1a2233;color:#fff;padding:8px 16px;font-size:13px;display:flex;gap:18px;align-items:center;font-family:-apple-system,'PingFang SC',sans-serif">
+<a href="/" style="color:#79c0ff;text-decoration:none;font-weight:600">&#127919; 新闻中心</a>
+<a href="/reports/archive.html" style="color:#d2a8ff;text-decoration:none">🗂 历史</a>
+<a href="/reports/latest/daily.html" style="color:#7ee787;text-decoration:none">📊 当日汇总</a>
+<a href="/editor.html" style="color:#ffa657;text-decoration:none">&#9881; 配置</a>
+<span style="margin-left:auto;opacity:.55">Hot News Radar</span>
+</div><button id="rdr-exp" onclick="RdrExp(true)" style="position:fixed;bottom:20px;right:20px;z-index:9999;background:#0969da;color:#fff;border:0;border-radius:22px;padding:10px 18px;font-size:13px;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.3)">⊞ 展开全部</button>
+<button id="rdr-col" onclick="RdrExp(false)" style="display:none;position:fixed;bottom:20px;right:76px;z-index:9999;background:#57606a;color:#fff;border:0;border-radius:22px;padding:10px 18px;font-size:13px;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.3)">⊟ 收起全部</button>
+<script>function RdrExp(open){document.querySelectorAll('#rdr-nav ~ * details, body details').forEach(function(d){open?d.setAttribute('open',''):d.removeAttribute('open')});document.getElementById('rdr-exp').style.display=open?'none':'inline-block';document.getElementById('rdr-col').style.display=open?'inline-block':'none'}</script>"""
+    # 注入到 <body> 标签后第一个位置；无 body 则放到开头
+    m = re.search(r'(<body[^>]*>)', s)
+    if m:
+        s = s[:m.end()] + nav + s[m.end():]
+    else:
+        s = nav + s
+    html_path.write_text(s, encoding="utf-8")
+    return True
+
 def main():
     BASE.mkdir(parents=True, exist_ok=True)
     days = collect()
+    # 为全部历史快照注入导航条（幂等）
+    injected = 0
+    for d in sorted(BASE.iterdir()):
+        if d.is_dir() and DATE_RE.match(d.name):
+            for f in d.glob("*.html"):
+                if inject_nav(f):
+                    injected += 1
+    for f in [BASE/"latest"/n for n in ("current.html","daily.html","incremental.html")]:
+        if f.exists() and inject_nav(f):
+            injected += 1
+    if injected:
+        print(f"导航条已注入 {injected} 个页面")
     out = BASE / "archive.html"
     out.write_text(build_html(days), encoding="utf-8")
     print(f"归档页已生成: {out} ({len(days)} 天)")
