@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Hot News Radar · 新闻中心</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#1a2233">
+<link rel="apple-touch-icon" href="/icon-192.png">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;background:#f5f6f8;color:#24292f;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
@@ -41,5 +44,6 @@ fetch('reports/archive.html').then(r=>r.text()).then(t=>{
   if(m) document.getElementById('archive-meta').textContent=`已有 ${m[1]} 天 ${n?n[1]:''} 快照 →`;
 }).catch(()=>{});
 </script>
+<script>if("serviceWorker" in navigator){navigator.serviceWorker.register("/sw.js")}</script>
 </body>
 </html>

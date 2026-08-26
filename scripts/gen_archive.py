@@ -118,8 +118,11 @@ def build_html(days):
         '</div>'
         '<p style="text-align:center;margin-top:14px"><a href="older.html" style="color:#0969da;font-size:14px">&#128230; 90 天前的更早日汇总 &#8594;</a></p>'
     )
+    PAGE_SIZE = 30
+    day_items = list(days.items())
+    visible, hidden = day_items[:PAGE_SIZE], day_items[PAGE_SIZE:]
     body = []
-    for date, snaps in days.items():
+    for date, snaps in visible:
         wd = "一二三四五六日"[datetime.strptime(date, "%Y-%m-%d").weekday()]
         body.append(
             '<details class="day" open><summary class="day-h"><b>' + date +
@@ -128,6 +131,24 @@ def build_html(days):
         for hh, mm, fn in snaps:
             body.append('<a class="t" href="' + date + '/' + fn + '">' + hh + ':' + mm + '</a>')
         body.append('</div></details>')
+    if hidden:
+        body.append('<div id="more-days" style="display:none">')
+        for date, snaps in hidden:
+            wd = "一二三四五六日"[datetime.strptime(date, "%Y-%m-%d").weekday()]
+            body.append(
+                '<details class="day"><summary class="day-h"><b>' + date +
+                ' 周' + wd + '</b><small>' + str(len(snaps)) + ' 个快照</small></summary>'
+                '<div class="day-b">')
+            for hh, mm, fn in snaps:
+                body.append('<a class="t" href="' + date + '/' + fn + '">' + hh + ':' + mm + '</a>')
+            body.append('</div></details>')
+        body.append('</div>')
+        body.append('<button id="load-more" onclick="var m=document.getElementById(\'more-days\');'
+                    'm.style.display=\'block\';this.remove()" '
+                    'style="display:block;margin:16px auto;padding:10px 26px;background:#fff;'
+                    'color:#0969da;border:1px solid #d0d7de;border-radius:22px;font-size:14px;'
+                    'cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.06)">'
+                    '&#128230; 加载更早 ' + str(len(hidden)) + ' 天</button>')
     if extra:
         body.append('<details class="day" open><summary class="day-h">'
                     '<b>&#128230; 更早日份（每日汇总）</b><small>'
@@ -165,7 +186,7 @@ def inject_nav(html_path):
                 html_path.write_text(s, encoding="utf-8")
                 return True
         return False
-    inject = NAV_HTML + COLLAPSE_JS
+    inject = NAV_HTML + COLLAPSE_JS + '<div id="rdr-search" style="position:fixed;top:52px;left:50%;transform:translateX(-50%);z-index:9998;width:min(420px,86vw)"><input id="rdr-q" placeholder="&#128269; 在本页过滤标题…" style="width:100%;padding:9px 15px;font-size:13.5px;border:1px solid rgba(0,0,0,.12);border-radius:20px;outline:none;background:rgba(255,255,255,.92);backdrop-filter:blur(10px);box-shadow:0 2px 10px rgba(0,0,0,.08);font-family:inherit"><span id="rdr-hit" style="position:absolute;right:14px;top:9px;font-size:12px;color:#0969da"></span></div><script>(function(){var q=document.getElementById("rdr-q"),hit=document.getElementById("rdr-hit");if(!q)return;var pre=new URLSearchParams(location.search).get("q");function apply(kw){var items=document.querySelectorAll(".news-item,.rss-item,.item");var n=0;items.forEach(function(it){var t=it.textContent.toLowerCase();var ok=!kw||t.indexOf(kw)>-1;it.style.display=ok?"":"none";if(ok&&kw)n++;});hit.textContent=kw?(n+" 条命中"):"";}q.addEventListener("input",function(){apply(this.value.trim().toLowerCase())});if(pre){q.value=pre;apply(pre.toLowerCase())}})();</script>'
     m = re.search(r'(<body[^>]*>)', s)
     if m:
         s = s[:m.end()] + inject + s[m.end():]
