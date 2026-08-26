@@ -62,7 +62,17 @@ def collect():
     return days
 
 def build_html(days):
-    total = sum(len(v) for v in days.values())
+    # 合并 archive-daily 层(90天前的日级汇总)为"单条目日期"
+    daily_arch = BASE / "archive-daily"
+    extra = []
+    if daily_arch.is_dir():
+        known = set(days.keys())
+        for f in sorted(daily_arch.glob("*-daily.html"), reverse=True):
+            d = f.name.replace("-daily.html", "")
+            if d not in known:
+                extra.append((d, f))
+        extra.sort(reverse=True)
+    total = sum(len(v) for v in days.values()) + len(extra)
     peak = max((len(v) for v in days.values()), default=0)
     css_extra = (
         ".search-wrap{max-width:900px;margin:0 auto;padding:0 20px 14px}"
@@ -118,6 +128,15 @@ def build_html(days):
         for hh, mm, fn in snaps:
             body.append('<a class="t" href="' + date + '/' + fn + '">' + hh + ':' + mm + '</a>')
         body.append('</div></details>')
+    if extra:
+        body.append('<details class="day" open><summary class="day-h">'
+                    '<b>&#128230; 更早日份（每日汇总）</b><small>'
+                    + str(len(extra)) + ' 天</small></summary><div class="day-b">')
+        for d, f in extra:
+            wd = "一二三四五六日"[datetime.strptime(d, "%Y-%m-%d").weekday()]
+            body.append('<a class="t" href="archive-daily/' + f.name + '" '
+                        'title="' + d + ' 全天汇总">' + d[5:] + ' 周' + wd + '</a>')
+        body.append('</div></details>')
     foot = (
         '<p style="text-align:center;margin-top:10px"><small>最后更新：'
         + datetime.now().strftime('%Y-%m-%d %H:%M') + '</small></p></main>'
@@ -133,6 +152,18 @@ def inject_nav(html_path):
     except Exception:
         return False
     if "rdr-nav" in s:
+        # 升级路径: 已有导航但缺折叠组件(历史页), 就地追加后返回
+        if "rdr-fold" not in s:
+            m0 = re.search(r'(<body[^>]*>)', s)
+            inject_pos = m0.end() if m0 else 0
+            # 插在 rdr-nav div 结束之后, 避免破坏nav结构
+            nav_end = s.find('</div>', s.find('rdr-nav'))
+            if nav_end > -1:
+                nav_end += len('</div>')
+                # COLLAPSE_JS 含 <script>, 直接放nav后
+                s = s[:nav_end] + COLLAPSE_JS.replace('<script>', '<script>', 1) + s[nav_end:]
+                html_path.write_text(s, encoding="utf-8")
+                return True
         return False
     inject = NAV_HTML + COLLAPSE_JS
     m = re.search(r'(<body[^>]*>)', s)
