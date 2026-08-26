@@ -493,10 +493,7 @@
 
         <div class="footer">
             <div class="footer-content">
-                由 <span class="project-name">TrendRadar</span> 生成 · 
-                <a href="https://github.com/sansan0/TrendRadar" target="_blank" class="footer-link">
-                    GitHub 开源项目
-                </a>
+                Hot News Radar · 引擎基于 <a href="https://github.com/sansan0/TrendRadar" target="_blank" class="footer-link">TrendRadar</a> (GPL-3.0)
             </div>
         </div>
     </div>
@@ -543,7 +540,7 @@
                 
                 const link = document.createElement('a');
                 const now = new Date();
-                const filename = `TrendRadar_热点新闻分析_${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}.png`;
+                const filename = `HotNewsRadar_${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}.png`;
                 
                 link.download = filename;
                 link.href = canvas.toDataURL('image/png', 1.0);
@@ -708,7 +705,7 @@
                 buttons.style.visibility = 'visible';
                 
                 const now = new Date();
-                const baseFilename = `TrendRadar_热点新闻分析_${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
+                const baseFilename = `HotNewsRadar_${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
                 
                 for (let i = 0; i < images.length; i++) {
                     const link = document.createElement('a');

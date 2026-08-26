@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TrendRadar 配置文件编辑器</title>
+    <title>Hot News Radar · 配置编辑器</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- FontAwesome -->
@@ -20,9 +20,9 @@
     <!-- 顶部导航 -->
     <nav class="bg-white shadow-sm border-b border-gray-200 flex-shrink-0 z-20">
         <div class="max-w-full mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between">
-            <a href="https://github.com/sansan0/TrendRadar" target="_blank" class="flex items-center gap-3 hover:opacity-80 transition-opacity">
+            <a href="https://github.com/LeilaoMi/hot-news-radar" target="_blank" class="flex items-center gap-3 hover:opacity-80 transition-opacity">
                 <i class="fa-solid fa-sliders text-blue-600 text-lg"></i>
-                <span class="font-bold text-lg tracking-tight text-gray-900">TrendRadar <span class="text-gray-500 text-xs font-normal ml-2">可视化配置编辑器 </span></span>
+                <span class="font-bold text-lg tracking-tight text-gray-900">Hot News Radar <span class="text-gray-500 text-xs font-normal ml-2">配置编辑器 </span></span>
             </a>
 
             <!-- 隐私安全提示 -->
@@ -145,77 +145,26 @@
                     </div>
                     <span class="text-sm font-bold text-gray-700 tracking-tight">支持项目</span>
                 </div>
-                <p class="sidebar-quote text-[10px] text-gray-400 mt-1.5 leading-relaxed italic">若 TrendRadar 曾为你捕捉价值，不妨为它注入动力，助其持续进化</p>
+                <p class="sidebar-quote text-[10px] text-gray-400 mt-1.5 leading-relaxed italic">全量新闻雷达 · 每小时自动快照 · AI 智能分析</p>
             </div>
 
             <!-- 卡片列表 -->
-            <div class="flex-1 p-3 space-y-3 overflow-y-auto sidebar-scroll">
-
-                <!-- 01: 点亮 Star -->
-                <a href="https://github.com/sansan0/TrendRadar" target="_blank" class="sidebar-card group block">
+                <!-- 致谢 -->
+                <div class="sidebar-card">
                     <div class="flex items-center gap-2 mb-2.5">
-                        <div class="sidebar-card-icon bg-orange-100 text-orange-500 group-hover:bg-orange-200">
-                            <i class="fa-solid fa-star"></i>
+                        <div class="sidebar-card-icon bg-blue-100 text-blue-600">
+                            <i class="fa-solid fa-code-branch"></i>
                         </div>
                         <div class="min-w-0">
-                            <div class="text-xs font-bold text-gray-800 leading-tight">点亮 Star</div>
-                            <div class="text-[10px] text-gray-400 leading-tight mt-0.5">让更多人发现它</div>
+                            <div class="text-xs font-bold text-gray-800 leading-tight">引擎来源</div>
+                            <div class="text-[10px] text-gray-400 leading-tight mt-0.5">TrendRadar (GPL-3.0)</div>
                         </div>
                     </div>
-                    <div class="sidebar-cta bg-gradient-to-r from-orange-400 to-red-500 text-white group-hover:from-orange-500 group-hover:to-red-600 shadow-sm group-hover:shadow-md">
-                        <i class="fa-brands fa-github mr-1"></i>前往 GitHub
-                    </div>
-                </a>
-
-                <!-- 02: 不迷路 (微信) -->
-                <div class="sidebar-card sidebar-card-clickable group" onclick="openQrModal('weixin')">
-                    <div class="flex items-center gap-2 mb-2.5">
-                        <div class="sidebar-card-icon bg-green-100 text-green-600 group-hover:bg-green-200">
-                            <i class="fa-brands fa-weixin"></i>
-                        </div>
-                        <div class="min-w-0">
-                            <div class="text-xs font-bold text-gray-800 leading-tight">不迷路</div>
-                            <div class="text-[10px] text-gray-400 leading-tight mt-0.5">获取更新通知</div>
-                        </div>
-                    </div>
-                    <div class="flex justify-center relative">
-                        <div class="sidebar-qr group-hover:shadow-md">
-                            <img src="./assets/weixin.webp" alt="微信公众号" class="w-full h-full object-contain">
-                        </div>
-                        <div class="sidebar-enlarge-hint">
-                            <i class="fa-solid fa-expand mr-1"></i>点击放大
-                        </div>
-                    </div>
-                    <p class="text-[10px] text-gray-400 text-center mt-2">扫码关注公众号</p>
+                    <p class="text-[10px] text-gray-400 leading-relaxed">核心引擎基于 sansan0/TrendRadar 构建，感谢原作者的开源贡献。</p>
+                    <a href="https://github.com/sansan0/TrendRadar" target="_blank" class="sidebar-cta bg-blue-50 text-blue-600 border border-blue-100 hover:bg-blue-100 inline-block mt-2">
+                        <i class="fa-solid fa-arrow-up-right-from-square mr-1"></i>访问上游项目
+                    </a>
                 </div>
-
-                <!-- 03: 随心赞赏 -->
-                <div class="sidebar-card sidebar-card-clickable group" onclick="openQrModal('donate')">
-                    <div class="flex items-center gap-2 mb-2.5">
-                        <div class="sidebar-card-icon bg-emerald-100 text-emerald-600 group-hover:bg-emerald-200">
-                            <i class="fa-solid fa-hand-holding-heart"></i>
-                        </div>
-                        <div class="min-w-0">
-                            <div class="text-xs font-bold text-gray-800 leading-tight">随心赞赏</div>
-                            <div class="text-[10px] text-gray-400 leading-tight mt-0.5">1 元也是鼓励</div>
-                        </div>
-                    </div>
-                    <div class="flex justify-center relative">
-                        <div class="sidebar-qr group-hover:shadow-md">
-                            <img src="https://cdn-1258574687.cos.ap-shanghai.myqcloud.com/img/%2F2026%2F01%2F18ecce7c224ce0ea4c59394c29e408f8-e0d1db45.webp" alt="微信支付" class="w-full h-full object-contain">
-                        </div>
-                        <div class="sidebar-enlarge-hint">
-                            <i class="fa-solid fa-expand mr-1"></i>点击放大
-                        </div>
-                    </div>
-                    <p class="text-[10px] text-gray-400 text-center mt-2">微信扫码 · 丰俭由人</p>
-                </div>
-
-                <!-- 04: 探索更多 -->
-                <a href="https://sansan0.github.io/mao-map/" target="_blank" class="sidebar-card group block">
-                    <div class="flex items-center gap-2 mb-2.5">
-                        <div class="sidebar-card-icon bg-red-100 text-red-500 group-hover:bg-red-200">
-                            <i class="fa-solid fa-map-location-dot"></i>
                         </div>
                         <div class="min-w-0">
                             <div class="text-xs font-bold text-gray-800 leading-tight">探索更多</div>
@@ -230,7 +179,7 @@
 
             <!-- 底部寄语 -->
             <div class="px-3 py-2.5 border-t border-gray-100 bg-white/60">
-                <p class="text-[10px] text-gray-300 text-center italic font-serif tracking-wide">"开源不易，感谢支持"</p>
+                <p class="text-[10px] text-gray-300 text-center italic font-serif tracking-wide">"全量新闻 · 每小时快照 · AI 加持"</p>
             </div>
             </div>
         </div>
