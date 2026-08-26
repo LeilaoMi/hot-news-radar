@@ -397,7 +397,6 @@ ai:
   
   api_base: "https://open.bigmodel.cn/api/paas/v4"   # 智谱GLM官方端点
   analysis_model: "openai/glm-4.7-flash"   # AI分析专用模型（可选，留空则用上方model）
-  max_tokens: 8000                          # 推理模型思考+正文共用额度，给足余量
                                             # 推理模型适合分析/筛选等复杂判断；翻译保持用快速模型
                                     #
                                     # ❓ 什么时候需要填？
@@ -424,7 +423,7 @@ ai:
   temperature: 1.0                  # 采样温度 (0.0-2.0)
                                     # 注意：部分模型(如 gpt-5)可能要求必须为 1.0，否则会报错
   
-  max_tokens: 5000                  # 最大生成 token 数
+  max_tokens: 8000                  # 最大生成 token 数（推理模型需更大空间容纳思维链）
                                     # 注意：如果 API 不支持此参数(报 HTTP 400)，请设为 0 以禁用发送
   # 高级选项
   num_retries: 1                    # 失败重试次数
