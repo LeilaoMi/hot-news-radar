@@ -41,7 +41,7 @@ SEARCH_JS = (
 COLLAPSE_JS = (
     '<script>(function(){var btn=document.createElement("button");btn.id="rdr-fold";btn.innerHTML="&#9776; 折叠分组";btn.style.cssText="position:fixed;bottom:20px;right:20px;z-index:9999;background:#f0f6ff;color:#0969da;border:1px solid #d0d7de;border-radius:20px;padding:8px 16px;font-size:13px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.08);font-family:inherit"var folded=false;btn.onclick=function(){folded=!folded;this.innerHTML=folded?"&#9776; 展开全部分组":"&#9776; 折叠分组";document.querySelectorAll("details").forEach(function(d){folded?d.removeAttribute("open"):d.setAttribute("open","")});var groups=document.querySelectorAll(".feed-group, .group-header, section");groups.forEach(function(g){var kids=g.querySelectorAll(".news-item, .rss-item, .item");if(kids.length>8){kids.forEach(function(k,i){if(folded&&i>=5){k.style.display="none"}else{k.style.display=""}});var more=g.querySelector(".rdr-more");if(!more&&kids.length>8){more=document.createElement("div");more.className="rdr-more";more.style.cssText="text-align:center;padding:10px;color:#0969da;font-size:13px;cursor:pointer";g.appendChild(more)}if(folded){more.textContent="下拉显示全部 "+kids.length+" 条 ↓";more.onclick=function(){kids.forEach(function(k){k.style.display=""});more.remove()}}else if(more.parentNode){more.parentNode.removeChild(more)}}}})})();</script>'
 )
-
+SEARCHBAR_JS = (    '<div id="rdr-search" style="position:fixed;top:52px;left:50%;transform:translateX(-50%);z-index:9998;width:min(420px,86vw)"><input id="rdr-q" placeholder="&#128269; 在本页过滤标题…" style="width:100%;padding:9px 15px;font-size:13.5px;border:1px solid rgba(0,0,0,.12);border-radius:20px;outline:none;background:rgba(255,255,255,.92);backdrop-filter:blur(10px);box-shadow:0 2px 10px rgba(0,0,0,.08);font-family:inherit"><span id="rdr-hit" style="position:absolute;right:14px;top:9px;font-size:12px;color:#0969da"></span></div><script>(function(){var q=document.getElementById("rdr-q"),hit=document.getElementById("rdr-hit");if(!q)return;var pre=new URLSearchParams(location.search).get("q");function apply(kw){var items=document.querySelectorAll(".news-item,.rss-item,.item");var n=0;items.forEach(function(it){var t=it.textContent.toLowerCase();var ok=!kw||t.indexOf(kw)>-1;it.style.display=ok?"":"none";if(ok&&kw)n++;});hit.textContent=kw?(n+" 条命中"):"";}q.addEventListener("input",function(){apply(this.value.trim().toLowerCase())});if(pre){q.value=pre;apply(pre.toLowerCase())}})();</script>')
 def esc(s):
     return s.replace("&","&").replace("<","<").replace(">",">")
 
@@ -173,20 +173,23 @@ def inject_nav(html_path):
     except Exception:
         return False
     if "rdr-nav" in s:
-        # 升级路径: 已有导航但缺折叠组件(历史页), 就地追加后返回
+        # 升级路径: 已有导航的历史页, 检查缺失的新组件并逐一就地补插
+        missing = []
         if "rdr-fold" not in s:
+            missing.append(COLLAPSE_JS)
+        if "rdr-search" not in s:
+            missing.append(SEARCHBAR_JS)
+        if not missing:
+            return False
+        inject = "".join(missing)
+        nav_end = s.find('</div>', s.find('id="rdr-nav"'))
+        if nav_end > -1:
+            nav_end += len('</div>')
+            s = s[:nav_end] + inject + s[nav_end:]
+        else:
             m0 = re.search(r'(<body[^>]*>)', s)
-            inject_pos = m0.end() if m0 else 0
-            # 插在 rdr-nav div 结束之后, 避免破坏nav结构
-            nav_end = s.find('</div>', s.find('rdr-nav'))
-            if nav_end > -1:
-                nav_end += len('</div>')
-                # COLLAPSE_JS 含 <script>, 直接放nav后
-                s = s[:nav_end] + COLLAPSE_JS.replace('<script>', '<script>', 1) + s[nav_end:]
-                html_path.write_text(s, encoding="utf-8")
-                return True
-        return False
-    inject = NAV_HTML + COLLAPSE_JS + '<div id="rdr-search" style="position:fixed;top:52px;left:50%;transform:translateX(-50%);z-index:9998;width:min(420px,86vw)"><input id="rdr-q" placeholder="&#128269; 在本页过滤标题…" style="width:100%;padding:9px 15px;font-size:13.5px;border:1px solid rgba(0,0,0,.12);border-radius:20px;outline:none;background:rgba(255,255,255,.92);backdrop-filter:blur(10px);box-shadow:0 2px 10px rgba(0,0,0,.08);font-family:inherit"><span id="rdr-hit" style="position:absolute;right:14px;top:9px;font-size:12px;color:#0969da"></span></div><script>(function(){var q=document.getElementById("rdr-q"),hit=document.getElementById("rdr-hit");if(!q)return;var pre=new URLSearchParams(location.search).get("q");function apply(kw){var items=document.querySelectorAll(".news-item,.rss-item,.item");var n=0;items.forEach(function(it){var t=it.textContent.toLowerCase();var ok=!kw||t.indexOf(kw)>-1;it.style.display=ok?"":"none";if(ok&&kw)n++;});hit.textContent=kw?(n+" 条命中"):"";}q.addEventListener("input",function(){apply(this.value.trim().toLowerCase())});if(pre){q.value=pre;apply(pre.toLowerCase())}})();</script>'
+        html_path.write_text(s, encoding="utf-8")
+        return True
     m = re.search(r'(<body[^>]*>)', s)
     if m:
         s = s[:m.end()] + inject + s[m.end():]
