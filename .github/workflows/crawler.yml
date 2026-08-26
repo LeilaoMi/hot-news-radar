@@ -192,3 +192,14 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: pages deploy cloudflare_dist --project-name=${{ secrets.CLOUDFLARE_PROJECT_NAME }}
+
+      - name: Notify on failure
+        if: failure()
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          curl -s -X POST "https://ntfy.sh/$NTFY_TOPIC" \
+            -H "Title: 🚨 雷达故障告警" \
+            -H "Tags: rotating_light" \
+            -H "Priority: high" \
+            -d "Get Hot News 运行失败于 $(TZ=Asia/Shanghai date '+%m-%d %H:%M')。请查看 Actions 日志: https://github.com/${{ github.repository }}/actions" || true
