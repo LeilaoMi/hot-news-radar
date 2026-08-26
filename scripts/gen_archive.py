@@ -21,17 +21,7 @@ NAV_HTML = (
     '<a href="/editor.html" style="color:#ffa657;text-decoration:none">&#9881; 配置</a>'
     '<span style="margin-left:auto;opacity:.55">Hot News Radar</span>'
     '</div>'
-    '<button id="rdr-exp" onclick="RdrExp(true)" style="position:fixed;bottom:20px;right:20px;'
-    'z-index:9999;background:#0969da;color:#fff;border:0;border-radius:22px;padding:10px 18px;'
-    'font-size:13px;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.3)">&#8862; 展开全部</button>'
-    '<button id="rdr-col" onclick="RdrExp(false)" style="display:none;position:fixed;bottom:20px;'
-    'right:76px;z-index:9999;background:#57606a;color:#fff;border:0;border-radius:22px;'
-    'padding:10px 18px;font-size:13px;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.3)">'
-    '&#8863; 收起全部</button>'
-    '<script>function RdrExp(o){document.querySelectorAll("details").forEach(function(d){'
-    'o?d.setAttribute("open",""):d.removeAttribute("open")});'
-    'document.getElementById("rdr-exp").style.display=o?"none":"inline-block";'
-    'document.getElementById("rdr-col").style.display=o?"inline-block":"none"}</script>'
+    ''
 )
 
 SEARCH_JS = (
@@ -46,6 +36,10 @@ SEARCH_JS = (
     'd.scrollIntoView({behavior:"smooth",block:"start"});'
     'setTimeout(function(){d.style.outline=""},2200);return;}}'
     'alert("未找到 "+v+"（当天无快照）");});</script>'
+)
+
+COLLAPSE_JS = (
+    '<script>(function(){var btn=document.createElement("button");btn.id="rdr-fold";btn.innerHTML="&#9776; 折叠分组";btn.style.cssText="position:fixed;bottom:20px;right:20px;z-index:9999;background:#f0f6ff;color:#0969da;border:1px solid #d0d7de;border-radius:20px;padding:8px 16px;font-size:13px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.08);font-family:inherit"var folded=false;btn.onclick=function(){folded=!folded;this.innerHTML=folded?"&#9776; 展开全部分组":"&#9776; 折叠分组";document.querySelectorAll("details").forEach(function(d){folded?d.removeAttribute("open"):d.setAttribute("open","")});var groups=document.querySelectorAll(".feed-group, .group-header, section");groups.forEach(function(g){var kids=g.querySelectorAll(".news-item, .rss-item, .item");if(kids.length>8){kids.forEach(function(k,i){if(folded&&i>=5){k.style.display="none"}else{k.style.display=""}});var more=g.querySelector(".rdr-more");if(!more&&kids.length>8){more=document.createElement("div");more.className="rdr-more";more.style.cssText="text-align:center;padding:10px;color:#0969da;font-size:13px;cursor:pointer";g.appendChild(more)}if(folded){more.textContent="下拉显示全部 "+kids.length+" 条 ↓";more.onclick=function(){kids.forEach(function(k){k.style.display=""});more.remove()}}else if(more.parentNode){more.parentNode.removeChild(more)}}}})})();</script>'
 )
 
 def esc(s):
@@ -140,11 +134,12 @@ def inject_nav(html_path):
         return False
     if "rdr-nav" in s:
         return False
+    inject = NAV_HTML + COLLAPSE_JS
     m = re.search(r'(<body[^>]*>)', s)
     if m:
-        s = s[:m.end()] + NAV_HTML + s[m.end():]
+        s = s[:m.end()] + inject + s[m.end():]
     else:
-        s = NAV_HTML + s
+        s = inject + s
     html_path.write_text(s, encoding="utf-8")
     return True
 
@@ -171,11 +166,11 @@ def inject_prevnext():
                 return ('<a href="' + x.name + '" style="color:#79c0ff;text-decoration:none">'
                         + t + ' &#183; ' + x.stem.replace('-', ':') + '</a>') if x else \
                        ('<span style="opacity:.3">' + t + '</span>')
-            bar = ('<div id="rdr-pn" style="position:fixed;bottom:64px;left:16px;z-index:9998;'
-                   'background:#1a2233;color:#fff;border-radius:10px;padding:7px 14px;font-size:12px;'
-                   'display:flex;gap:14px;font-family:sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.3)">'
-                   + label(prev_f, '&#9664; 更早') 
-                   + '<a href="/reports/archive.html" style="color:#d2a8ff;text-decoration:none">&#128193;</a>'
+            bar = ('<div id="rdr-pn" style="position:fixed;bottom:18px;left:50%;transform:translateX(-50%);'
+                   'z-index:9998;background:rgba(255,255,255,.85);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);'
+                   'border:1px solid rgba(0,0,0,.08);color:#24292f;border-radius:999px;padding:8px 18px;font-size:13px;'
+                   'display:flex;gap:10px;align-items:center;'
+                   'font-family:-apple-system,\'PingFang SC\',sans-serif;box-shadow:0 4px 22px rgba(0,0,0,.12)">'
                    + label(next_f, '更晚 &#9654;') + '</div>')
             m = re.search(r'(<body[^>]*>)', s)
             if m:
