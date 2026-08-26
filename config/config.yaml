@@ -355,7 +355,7 @@ ai:
   # LiteLLM 模型格式: 提供商/模型名
   # ── 免费方案速查 (2026) ─────────────────────────────
   #   智谱 GLM-4-Flash: 完全免费, 国内直连快, 注册送key
-  #     model: "zhipuai/glm-4-flash" + api_base: "https://open.bigmodel.cn/api/paas/v4"
+  #     model: "openai/glm-4-flash" + api_base: "https://open.bigmodel.cn/api/paas/v4"
   #   Gemini 2.5 Flash: 免费层每天1500次请求(个人Google账号)
   #     model: "gemini/gemini-2.5-flash"
   #   SiliconFlow 免费档: Qwen2.5-7B 等小模型标价0元
@@ -371,7 +371,7 @@ ai:
   # 完整列表: https://docs.litellm.ai/docs/providers
   # 如果你对于看英文文档比较头疼，那么可以点击页面右下角的 【Ask AI】 ,用中文询问怎么配置
 
-  model: "zhipuai/glm-4-flash"
+  model: "openai/glm-4-flash"
 
   api_key: ""                       # API Key（建议使用环境变量 AI_API_KEY）
   
