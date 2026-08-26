@@ -47,6 +47,18 @@
 > 与上游 TrendRadar 的核心差异：上游是"关键词监控工具"，本项目是
 > **"全量新闻雷达"**——词组配置为空即进入全量模式，任何类目的新闻都不会被漏掉。
 
+## 🧭 站点导航
+
+| 入口 | 说明 |
+|---|---|
+| [🏠 新闻中心（门户）](https://leilaomi.github.io/hot-news-radar/) | **统一入口**：今日热榜 / 当日汇总 / 历史归档 / 配置编辑器 |
+| [🔥 今日实时热榜](https://leilaomi.github.io/hot-news-radar/reports/latest/current.html) | 最近一轮全平台热点（每小时更新，右下角一键展开/收起）|
+| [📊 当日汇总](https://leilaomi.github.io/hot-news-radar/reports/latest/daily.html) | 全天累计去重视图 + AI 分析 |
+| [🗂️ 历史归档](https://leilaomi.github.io/hot-news-radar/reports/archive.html) | 93 天 1000+ 快照按日期分组，任意页带导航条可跳转 |
+| [⚙️ 配置编辑器](https://leilaomi.github.io/hot-news-radar/editor.html) | 网页端编辑时间线 / 关键词 / RSS 源 |
+
+> 全站每一页顶部都有粘性导航条：`🎯 新闻中心 · 🗂 历史 · 📊 当日汇总 · ⚙️ 配置`
+
 ## 功能总览
 
 | 功能 | 状态 | 说明 |
@@ -142,7 +154,7 @@ GitHub Actions (cron :33 每小时)
 
 ## 历史归档
 
-- **入口**：<https://leilaomi.github.io/hot-news-radar/reports/archive.html>
+- **入口**：[新闻中心门户](https://leilaomi.github.io/hot-news-radar/) → 🗂️ 历史归档
 - 每小时快照自动存入 `docs/reports/YYYY-MM-DD/HH-MM.html`
 - 归档页由 `scripts/gen_archive.py` 在每轮发布时重新生成：
   按日期折叠分组、显示覆盖天数/快照总数/单日峰值统计
@@ -226,7 +238,8 @@ hot-news-radar/
 │   └── gen_archive.py       # 归档索引页生成器（本项目新增）
 ├── config/                  # 所有用户配置（见上表）
 ├── docs/
-│   ├── index.html           # 可视化配置编辑器
+│   ├── index.html           # 站点门户（新闻中心）
+│   ├── editor.html          # 可视化配置编辑器
 │   ├── reports/             # 每小时快照存档（自动增长）
 │   └── assets/              # 编辑器静态资源
 ├── docker/                  # Docker 部署相关
