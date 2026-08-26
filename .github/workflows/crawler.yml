@@ -129,6 +129,8 @@ jobs:
           mkdir -p docs/reports
           cp -r output/html/. docs/reports/
           python3 scripts/gen_archive.py
+          KEEP_FULL_DAYS=90 python3 scripts/retention.py
+          python3 scripts/gen_archive.py
           python3 scripts/gen_feed.py
           if [ -f docs/reports/latest/incremental.html ]; then
             cp docs/reports/latest/incremental.html docs/reports/index.html

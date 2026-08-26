@@ -54,6 +54,8 @@ def esc(s):
 def collect():
     days = {}
     for d in sorted(BASE.iterdir(), reverse=True):
+        if d.name == "archive-daily":
+            continue
         if not (d.is_dir() and DATE_RE.match(d.name)):
             continue
         files = []
@@ -110,6 +112,7 @@ def build_html(days):
         '<div class="stat"><b>' + str(total) + '</b><span>快照总数</span></div>'
         '<div class="stat"><b>' + str(peak) + '</b><span>单日峰值</span></div>'
         '</div>'
+        '<p style="text-align:center;margin-top:14px"><a href="older.html" style="color:#0969da;font-size:14px">&#128230; 90 天前的更早日汇总 &#8594;</a></p>'
     )
     body = []
     for date, snaps in days.items():
