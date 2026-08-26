@@ -64,7 +64,7 @@ details[open] .day-h {{ border-bottom-color:#eee; }}
 </style>
 </head>
 <body>
-<header><h1>📡 热点雷达 · 历史归档</h1>
+<h1>📡 热点雷达 · 历史归档</h1>
 <p>每小时自动抓取的多平台热点快照，永久保存</p></header>
 <main>
 <div class="stats">
@@ -116,6 +116,16 @@ def inject_nav(html_path: Path):
     html_path.write_text(s, encoding="utf-8")
     return True
 
+def build_nav():
+    """门户/历史链接导航条, 适配归档页配色"""
+    return ('<nav style="background:#1a2233;color:#fff;padding:8px 16px;font-size:13px;'
+            'display:flex;gap:18px;align-items:center;font-family:inherit">'
+            '<a href="/" style="color:#79c0ff;text-decoration:none;font-weight:600">&#127919; 新闻中心</a>'
+            '<a href="/reports/latest/current.html" style="color:#7ee787;text-decoration:none">🔥 实时热榜</a>'
+            '<a href="/reports/latest/daily.html" style="color:#d2a8ff;text-decoration:none">📊 当日汇总</a>'
+            '<a href="/editor.html" style="color:#ffa657;text-decoration:none">&#9881; 配置</a>'
+            '<span style="margin-left:auto;opacity:.55">Hot News Radar</span></nav>')
+
 def main():
     BASE.mkdir(parents=True, exist_ok=True)
     days = collect()
@@ -132,7 +142,7 @@ def main():
     if injected:
         print(f"导航条已注入 {injected} 个页面")
     out = BASE / "archive.html"
-    out.write_text(build_html(days), encoding="utf-8")
+    out.write_text(build_html(days).replace("<body>", "<body>" + build_nav(), 1), encoding="utf-8")
     print(f"归档页已生成: {out} ({len(days)} 天)")
 
 if __name__ == "__main__":
