@@ -335,6 +335,11 @@ class NewsAnalyzer:
         print("[AI] 正在进行 AI 分析...")
         try:
             ai_config = self.ctx.config.get("AI", {})
+            # 分析任务可配置独立模型（如推理模型 glm-4.7-flash），未配置则沿用全局 ai.model
+            analysis_model = ai_config.get("analysis_model", "")
+            if analysis_model:
+                ai_config = dict(ai_config)
+                ai_config["MODEL"] = analysis_model
             debug_mode = self.ctx.config.get("DEBUG", False)
             analyzer = AIAnalyzer(ai_config, analysis_config, self.ctx.get_time, debug=debug_mode)
 
