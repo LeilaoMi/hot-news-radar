@@ -353,6 +353,14 @@ storage:
 # ===============================================================
 ai:
   # LiteLLM 模型格式: 提供商/模型名
+  # ── 免费方案速查 (2026) ─────────────────────────────
+  #   智谱 GLM-4-Flash: 完全免费, 国内直连快, 注册送key
+  #     model: "zhipu/glm-4-flash" + api_base: "https://open.bigmodel.cn/api/paas/v4"
+  #   Gemini 2.5 Flash: 免费层每天1500次请求(个人Google账号)
+  #     model: "gemini/gemini-2.5-flash"
+  #   SiliconFlow 免费档: Qwen2.5-7B 等小模型标价0元
+  #     model: "openai/Qwen/Qwen2.5-7B-Instruct(免费版)" + api_base: "https://api.siliconflow.cn/v1"
+  # ────────────────────────────────────────────────────
   # 示例:
   #   - deepseek/deepseek-v4-flash (DeepSeek，便宜够用，推荐)
   #   - deepseek/deepseek-v4-pro

@@ -1,0 +1,9 @@
+
+# Python 运行产物
+__pycache__/
+*.pyc
+*.pyo
+# 本地环境与输出
+.env
+output/
+!docker/.env.example
