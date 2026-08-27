@@ -167,29 +167,26 @@ def build_html(days):
     return head + "\n".join(body) + foot + SEARCH_JS
 
 def inject_nav(html_path):
-    """幂等注入导航条+展开/收起按钮到快照页"""
+    """幂等注入站点组件到快照页: 导航条 + 折叠按钮 + 页内搜索
+    - 无导航的新页面: 注入全部组件
+    - 已有导航的旧页面: 仅补插缺失组件(升级路径)
+    """
     try:
         s = html_path.read_text(encoding="utf-8")
     except Exception:
         return False
-    if "rdr-nav" in s:
-        # 升级路径: 已有导航的历史页, 检查缺失的新组件并逐一就地补插
-        missing = []
-        if "rdr-fold" not in s:
-            missing.append(COLLAPSE_JS)
-        if "rdr-search" not in s:
-            missing.append(SEARCHBAR_JS)
-        if not missing:
-            return False
-        inject = "".join(missing)
-        nav_end = s.find('</div>', s.find('id="rdr-nav"'))
-        if nav_end > -1:
-            nav_end += len('</div>')
-            s = s[:nav_end] + inject + s[nav_end:]
-        else:
-            m0 = re.search(r'(<body[^>]*>)', s)
-        html_path.write_text(s, encoding="utf-8")
-        return True
+
+    missing = []
+    if "rdr-nav" not in s:
+        missing.append(NAV_HTML)
+    if "rdr-fold" not in s:
+        missing.append(COLLAPSE_JS)
+    if "rdr-search" not in s:
+        missing.append(SEARCHBAR_JS)
+    if not missing:
+        return False
+
+    inject = "".join(missing)
     m = re.search(r'(<body[^>]*>)', s)
     if m:
         s = s[:m.end()] + inject + s[m.end():]
@@ -197,7 +194,6 @@ def inject_nav(html_path):
         s = inject + s
     html_path.write_text(s, encoding="utf-8")
     return True
-
 
 def inject_prevnext():
     """为同一日期目录内的快照页注入 上一时刻/下一时刻 导航（幂等：rdr-pn 标记）"""
