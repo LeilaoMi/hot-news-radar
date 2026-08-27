@@ -140,6 +140,14 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # daily保鲜: 若超过24h未更新则用current兜底，避免页面长期显示旧日期
+          if [ -f docs/reports/latest/daily.html ]; then
+            age=$(( $(date +%s) - $(stat -c %Y docs/reports/latest/daily.html) ))
+            if [ "$age" -gt 86400 ]; then
+              echo "daily已过期 $((age/3600))h，用current兜底刷新"
+              cp docs/reports/latest/current.html docs/reports/latest/daily.html
+            fi
+          fi
           git add docs/reports/
           if git diff --cached --quiet; then
             echo "no changes to publish"
