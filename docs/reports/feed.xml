@@ -4,7 +4,14 @@
 <link>https://leilaomi.github.io/hot-news-radar/</link>
 <description>每日新闻雷达快照更新通知</description>
 <language>zh-CN</language>
-<lastBuildDate>Thu, 27 Aug 2026 05:37:00 +0800</lastBuildDate>
+<lastBuildDate>Fri, 28 Aug 2026 00:03:00 +0800</lastBuildDate>
+<item>
+<title>2026-08-28 热点雷达 · 1 个时段快照</title>
+<link>https://leilaomi.github.io/hot-news-radar/reports/2026-08-28/00-03.html</link>
+<guid isPermaLink="false">2026-08-28</guid>
+<pubDate>Fri, 28 Aug 2026 00:03:00 +0800</pubDate>
+<description>2026-08-28 共 1 次抓取，覆盖全天热点变化。首次 00:03，末次 00:03。</description>
+</item>
 <item>
 <title>2026-08-27 热点雷达 · 8 个时段快照</title>
 <link>https://leilaomi.github.io/hot-news-radar/reports/2026-08-27/05-37.html</link>
@@ -46,12 +53,5 @@
 <guid isPermaLink="false">2026-08-22</guid>
 <pubDate>Sat, 22 Aug 2026 23:49:00 +0800</pubDate>
 <description>2026-08-22 共 24 次抓取，覆盖全天热点变化。首次 00:01，末次 23:49。</description>
-</item>
-<item>
-<title>2026-08-21 热点雷达 · 23 个时段快照</title>
-<link>https://leilaomi.github.io/hot-news-radar/reports/2026-08-21/23-05.html</link>
-<guid isPermaLink="false">2026-08-21</guid>
-<pubDate>Fri, 21 Aug 2026 23:05:00 +0800</pubDate>
-<description>2026-08-21 共 23 次抓取，覆盖全天热点变化。首次 00:01，末次 23:05。</description>
 </item>
 </channel></rss>
