@@ -679,6 +679,13 @@ def render_html_content(
                 padding-bottom: 8px;
                 border-bottom: 2px solid #10b981;
             }
+            .feed-header.collapsible { cursor: pointer; }
+            .feed-header .collapse-icon { font-size: 12px; color: #9ca3af; transition: transform 0.2s; margin-left: 8px; }
+            .feed-header.collapsible:hover { background: #f0fdf4; border-radius: 6px; margin: 0 -8px 12px -8px; padding: 8px; }
+            .feed-group.collapsed .rss-item { display: none; }
+            .feed-group.collapsed .collapse-icon { transform: rotate(-90deg); }
+
+
 
             .feed-name {
                 font-size: 15px;
@@ -1828,8 +1835,8 @@ def render_html_content(
 
             rss_html += f"""
                     <div class="feed-group">
-                        <div class="feed-header">
-                            <div class="feed-name">{html_escape(keyword)}</div>
+                        <div class="feed-header collapsible" onclick="this.parentElement.classList.toggle('collapsed')">
+                            <div class="feed-name">{html_escape(keyword)} <span class="collapse-icon">▼</span></div>
                             <div class="feed-count">{keyword_count} 条</div>
                         </div>"""
 
