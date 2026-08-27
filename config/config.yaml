@@ -396,7 +396,7 @@ ai:
   api_key: ""                       # API Key（建议使用环境变量 AI_API_KEY）
   
   api_base: "https://open.bigmodel.cn/api/paas/v4"   # 智谱GLM官方端点
-  analysis_model: "openai/glm-4.7-flash"   # AI分析专用模型（可选，留空则用上方model）
+  analysis_model: "openai/glm-4-flash"      # 分析专用(与翻译同模型, 稳定不限流; 如需推理可改 glm-4.7-flash)
                                             # 推理模型适合分析/筛选等复杂判断；翻译保持用快速模型
                                     #
                                     # ❓ 什么时候需要填？
