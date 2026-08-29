@@ -1,0 +1,61 @@
+name: Tests
+
+# 只在代码变更时跑，不挂在定时爬虫上。
+# crawler.yml 每小时触发 2 次，若把测试并进去，每天会多出 ~48 次环境准备
+# （约 32 分钟/天、960 分钟/月），会吃掉免费额度的一半。
+# 测试的目的是「改代码时立刻发现问题」，因此绑定 push/PR 即可。
+on:
+  push:
+    branches: [master]
+    paths:
+      - "trendradar/**"
+      - "mcp_server/**"
+      - "scripts/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/test.yml"
+  pull_request:
+    paths:
+      - "trendradar/**"
+      - "mcp_server/**"
+      - "scripts/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/test.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install dependencies
+        run: uv sync --frozen --no-dev
+
+      # --with 临时附加 pytest，不必把它写进 [dependency-groups]，也就不用动 uv.lock。
+      # 注意 crawler.yml 用的是 `uv sync --frozen --no-dev`，两者互不干扰。
+      - name: Run tests
+        run: uv run --with pytest --with pytest-timeout pytest

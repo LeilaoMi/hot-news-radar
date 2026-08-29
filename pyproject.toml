@@ -29,3 +29,13 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["trendradar", "mcp_server"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+# 存储层会打印连接日志，默认捕获不影响断言
+log_cli_level = "WARNING"
+addopts = "-q --strict-markers"
+markers = [
+    "slow: 耗时较长的测试（默认不跳过）",
+]
