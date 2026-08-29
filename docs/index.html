@@ -4,9 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Hot News Radar · 新闻中心</title>
-<link rel="manifest" href="/manifest.json">
+<link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#1a2233">
-<link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" type="image/png" href="icon-192.png">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;background:#f5f6f8;color:#24292f;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
@@ -30,7 +31,7 @@ footer a{color:#0969da;text-decoration:none}
 <h1>📡 Hot News Radar</h1>
 <p class="sub">全量新闻雷达 · 每小时快照 · AI 翻译与分析</p>
 <div class="grid">
-<a class="card" style="--c:#0969da" href="reports/latest/current.html"><div class="icon">🔥</div><b>今日实时热榜</b><p>最近一轮抓取的全平台热点，582+ 条新闻含国际源中文翻译</p><div class="meta">每小时更新 →</div></a>
+<a class="card" style="--c:#0969da" href="reports/latest/current.html"><div class="icon">🔥</div><b>今日实时热榜</b><p>最近一轮抓取的全平台热点，含国际源中文翻译</p><div class="meta" id="cur-meta">每小时更新 →</div></a>
 <a class="card" style="--c:#d29922" href="reports/latest/daily.html"><div class="icon">📊</div><b>当日汇总报告</b><p>全天累计去重视图，配合 AI 分析洞察当日趋势</p><div class="meta">每日汇总 →</div></a>
 <a class="card" style="--c:#8250df" href="reports/archive.html"><div class="icon">🗂️</div><b>历史归档库</b><p>按日期回看任意一天的全部快照，永久保存</p><div class="meta" id="archive-meta">加载中…</div></a>
 <a class="card" style="--c:#bf3989" href="reports/trends.html"><div class="icon">&#128200;</div><b>趋势洞察</b><p>持续热度榜 + 多平台共振，跨快照分析什么在真正升温</p><div class="meta">每日聚合 &#8594;</div></a>
@@ -39,11 +40,25 @@ footer a{color:#0969da;text-decoration:none}
 <footer>引擎 <a href="https://github.com/sansan0/TrendRadar" target="_blank">TrendRadar</a> (GPL-3.0) · <a href="https://github.com/LeilaoMi/hot-news-radar">GitHub 仓库</a></footer>
 </div>
 <script>
+fetch('reports/latest/current.html').then(r=>r.text()).then(t=>{
+  const d=new DOMParser().parseFromString(t,'text/html');
+  const n=d.querySelectorAll('.news-item,.new-item,.rss-item').length;
+  if(n) document.getElementById('cur-meta').textContent=`${n} 条 · 每小时更新 →`;
+}).catch(()=>{});
 fetch('reports/archive.html').then(r=>r.text()).then(t=>{
   const m=t.match(/(\d+)\s*<\/b><span>覆盖天数/); const n=t.match(/(\d+)\s*<\/b><span>快照总数/);
   if(m) document.getElementById('archive-meta').textContent=`已有 ${m[1]} 天 ${n?n[1]:''} 快照 →`;
 }).catch(()=>{});
 </script>
-<script>if("serviceWorker" in navigator){navigator.serviceWorker.register("/sw.js")}</script>
+<script>
+// 相对路径注册：兼容自定义域名根路径与 github.io 子路径两种访问方式。
+// 注意：仅在生产（https 或 localhost）下注册，且页面卸载前不强制缓存更新，
+// 报告页采用 network-first 策略，在线时始终拿到最新内容。
+if ("serviceWorker" in navigator && location.protocol !== "file:") {
+  navigator.serviceWorker.register("sw.js").catch(function (err) {
+    console.warn("Service Worker 注册失败（不影响正常浏览）:", err);
+  });
+}
+</script>
 </body>
 </html>

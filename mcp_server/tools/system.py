@@ -493,11 +493,11 @@ class SystemManagementTools:
             advanced_config = config_data.get("advanced", {})
             trendradar_url = advanced_config.get(
                 "version_check_url",
-                "https://raw.githubusercontent.com/sansan0/TrendRadar/refs/heads/master/version"
+                "https://raw.githubusercontent.com/LeilaoMi/hot-news-radar/refs/heads/master/version"
             )
             mcp_url = advanced_config.get(
                 "mcp_version_check_url",
-                "https://raw.githubusercontent.com/sansan0/TrendRadar/refs/heads/master/version_mcp"
+                "https://raw.githubusercontent.com/LeilaoMi/hot-news-radar/refs/heads/master/version_mcp"
             )
 
             # 配置代理

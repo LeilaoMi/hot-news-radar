@@ -73,9 +73,12 @@ def _load_report_config(config_data: Dict) -> Dict:
     # 环境变量覆盖
     sort_by_position_env = _get_env_bool("SORT_BY_POSITION_FIRST")
     max_news_env = _get_env_int_or_none("MAX_NEWS_PER_KEYWORD")
+    report_mode_env = _get_env_str("REPORT_MODE")
 
     return {
-        "REPORT_MODE": report_config.get("mode", "daily"),
+        # REPORT_MODE 支持环境变量覆盖：用于强制生成指定模式的报告
+        # （如 CI 中 daily 报告过期时，用 SCHEDULE_ENABLED=false REPORT_MODE=daily 补生成）
+        "REPORT_MODE": report_mode_env or report_config.get("mode", "daily"),
         "DISPLAY_MODE": report_config.get("display_mode", "keyword"),
         "RANK_THRESHOLD": report_config.get("rank_threshold", 10),
         "SORT_BY_POSITION_FIRST": sort_by_position_env if sort_by_position_env is not None else report_config.get("sort_by_position_first", False),

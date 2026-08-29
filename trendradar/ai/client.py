@@ -9,8 +9,6 @@ AI 客户端模块
 import os
 from typing import Any, Dict, List
 
-from litellm import completion
-
 
 class AIClient:
     """统一的 AI 客户端（基于 LiteLLM）"""
@@ -88,7 +86,9 @@ class AIClient:
             if key not in params:
                 params[key] = value
 
-        # 调用 LiteLLM
+        # 调用 LiteLLM（延迟导入：litellm 导入耗时约 6.7 秒，未启用 AI 时不应付出该开销）
+        from litellm import completion
+
         response = completion(**params)
 
         # 提取响应内容

@@ -1,6 +1,8 @@
 services:
   trendradar:
-    image: wantcat/trendradar:latest
+    # 镜像归属：原先硬编码为上游作者 wantcat 的仓库，拉取的是别人的镜像，
+    # 本地改动不会生效。改为可配置，默认 leilaomi，可在 docker/.env 中覆盖。
+    image: ${DOCKERHUB_USERNAME:-leilaomi}/trendradar:latest
     container_name: trendradar
     restart: unless-stopped
 
@@ -56,7 +58,7 @@ services:
       - IMMEDIATE_RUN=${IMMEDIATE_RUN:-true}
 
   trendradar-mcp:
-    image: wantcat/trendradar-mcp:latest
+    image: ${DOCKERHUB_USERNAME:-leilaomi}/trendradar-mcp:latest
     container_name: trendradar-mcp
     restart: unless-stopped
 

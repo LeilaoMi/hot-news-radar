@@ -4,14 +4,18 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Hot News Radar · 配置编辑器</title>
-    <!-- Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- FontAwesome -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- 第三方依赖已本地化到 vendor/：
+         cdn.tailwindcss.com 与 cdnjs.cloudflare.com 在国内经常不可达/极慢，
+         一旦 Tailwind 加载失败整个编辑器布局会塌陷；本地化同时也消除了
+         Tailwind Play CDN 的 "should not be used in production" 控制台警告。 -->
+    <!-- Tailwind CSS (v3 Play CDN, 本地副本) -->
+    <script src="./vendor/tailwind.js"></script>
+    <!-- FontAwesome (仅保留 woff2 字体，移除 ttf 回退) -->
+    <link rel="stylesheet" href="./vendor/fontawesome/css/all.min.css">
     <!-- js-yaml -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
+    <script src="./vendor/js-yaml.min.js"></script>
     <!-- SortableJS (拖拽排序库) -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
+    <script src="./vendor/sortable.min.js"></script>
     <!-- 自定义样式 -->
     <link rel="stylesheet" href="./assets/style.css">
 </head>
@@ -20,7 +24,7 @@
     <!-- 顶部导航 -->
     <nav class="bg-white shadow-sm border-b border-gray-200 flex-shrink-0 z-20">
         <div class="max-w-full mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between">
-            <a href="/reports/archive.html" class="flex items-center text-sm text-blue-600 hover:text-blue-800 mr-4 no-underline">📰 新闻中心</a>
+            <a href="reports/archive.html" class="flex items-center text-sm text-blue-600 hover:text-blue-800 mr-4 no-underline">📰 新闻中心</a>
                 <a href="https://github.com/LeilaoMi/hot-news-radar" target="_blank" class="flex items-center gap-3 hover:opacity-80 transition-opacity">
                 <i class="fa-solid fa-sliders text-blue-600 text-lg"></i>
                 <span class="font-bold text-lg tracking-tight text-gray-900">Hot News Radar <span class="text-gray-500 text-xs font-normal ml-2">配置编辑器 </span></span>

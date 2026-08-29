@@ -118,11 +118,41 @@ const STORAGE_KEY_CONFIG_TIME = 'trendradar_config_time';
 const STORAGE_KEY_FREQUENCY_TIME = 'trendradar_frequency_time';
 const STORAGE_KEY_TIMELINE_TIME = 'trendradar_timeline_time';
 
-// 官网配置文件 URL
-const REMOTE_CONFIG_URL = 'https://raw.githubusercontent.com/sansan0/TrendRadar/refs/heads/master/config/config.yaml';
-const REMOTE_FREQUENCY_URL = 'https://raw.githubusercontent.com/sansan0/TrendRadar/refs/heads/master/config/frequency_words.txt';
-const REMOTE_TIMELINE_URL = 'https://raw.githubusercontent.com/sansan0/TrendRadar/refs/heads/master/config/timeline.yaml';
-const REMOTE_VERSION_URL = 'https://raw.githubusercontent.com/sansan0/TrendRadar/refs/heads/master/version_configs';
+// ===== 远程配置来源 =====
+// 原本硬编码指向上游 sansan0/TrendRadar，导致「加载官网最新配置」拉到的是别人的配置；
+// 现指向本仓库，且 jsDelivr 优先 —— raw.githubusercontent 在国内经常不可达。
+const REPO_OWNER = 'LeilaoMi';
+const REPO_NAME = 'hot-news-radar';
+const REPO_BRANCH = 'master';
+
+const REMOTE_PATHS = {
+    config: 'config/config.yaml',
+    frequency: 'config/frequency_words.txt',
+    timeline: 'config/timeline.yaml',
+    version: 'version_configs'
+};
+
+/**
+ * 拉取仓库内文件，多源回退：jsDelivr → raw.githubusercontent
+ * 返回首个成功的 Response；全部失败则抛出最后一个错误。
+ */
+async function fetchRepoFile(path) {
+    const sources = [
+        `https://cdn.jsdelivr.net/gh/${REPO_OWNER}/${REPO_NAME}@${REPO_BRANCH}/${path}`,
+        `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/refs/heads/${REPO_BRANCH}/${path}`
+    ];
+    let lastErr;
+    for (const url of sources) {
+        try {
+            const r = await fetch(url, { cache: 'no-store' });
+            if (r.ok) return r;
+            lastErr = new Error(`HTTP ${r.status} (${url})`);
+        } catch (e) {
+            lastErr = e;
+        }
+    }
+    throw lastErr;
+}
 
 let currentYaml = "";
 let currentFrequency = "";
@@ -573,9 +603,9 @@ window.confirmLoadConfig = async function() {
 
     try {
         const promises = [];
-        if (loadConfig) promises.push(fetch(REMOTE_CONFIG_URL).then(r => ({ type: 'config', res: r })));
-        if (loadFrequency) promises.push(fetch(REMOTE_FREQUENCY_URL).then(r => ({ type: 'frequency', res: r })));
-        if (loadTimeline) promises.push(fetch(REMOTE_TIMELINE_URL).then(r => ({ type: 'timeline', res: r })));
+        if (loadConfig) promises.push(fetchRepoFile(REMOTE_PATHS.config).then(r => ({ type: 'config', res: r })));
+        if (loadFrequency) promises.push(fetchRepoFile(REMOTE_PATHS.frequency).then(r => ({ type: 'frequency', res: r })));
+        if (loadTimeline) promises.push(fetchRepoFile(REMOTE_PATHS.timeline).then(r => ({ type: 'timeline', res: r })));
 
         const results = await Promise.all(promises);
 
@@ -3245,7 +3275,7 @@ window.checkVersion = async function() {
     btn.disabled = true;
 
     try {
-        const versionRes = await fetch(REMOTE_VERSION_URL);
+        const versionRes = await fetchRepoFile(REMOTE_PATHS.version);
         if (!versionRes.ok) {
             throw new Error(`版本信息获取失败: ${versionRes.status}`);
         }
@@ -3598,8 +3628,7 @@ window.updateToLatest = async function() {
     showToast('正在从 GitHub 加载最新版本...', 'info');
 
     try {
-        const url = currentTab === 'config' ? REMOTE_CONFIG_URL : REMOTE_FREQUENCY_URL;
-        const res = await fetch(url);
+        const res = await fetchRepoFile(currentTab === 'config' ? REMOTE_PATHS.config : REMOTE_PATHS.frequency);
 
         if (!res.ok) {
             throw new Error(`加载失败: ${res.status}`);

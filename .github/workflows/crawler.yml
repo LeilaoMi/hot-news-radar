@@ -128,8 +128,12 @@ jobs:
           fi
           mkdir -p docs/reports
           cp -r output/html/. docs/reports/
+          # gen_daily_index 必须先于 gen_archive：归档页要检查 older.html 是否存在
+          # 才渲染「更早归档」入口，顺序反了会导致该入口在首次生成时缺失。
+          python3 scripts/gen_daily_index.py
           python3 scripts/gen_archive.py
           KEEP_FULL_DAYS=90 python3 scripts/retention.py
+          python3 scripts/gen_daily_index.py
           python3 scripts/gen_archive.py
           python3 scripts/gen_feed.py
           python3 scripts/build_trends.py
@@ -140,14 +144,34 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # daily保鲜: 若超过24h未更新则用current兜底，避免页面长期显示旧日期
-          if [ -f docs/reports/latest/daily.html ]; then
-            age=$(( $(date +%s) - $(stat -c %Y docs/reports/latest/daily.html) ))
-            if [ "$age" -gt 86400 ]; then
-              echo "daily已过期 $((age/3600))h，用current兜底刷新"
-              cp docs/reports/latest/current.html docs/reports/latest/daily.html
-            fi
+
+          # ── daily 保鲜 ──────────────────────────────────────────────
+          # 原实现有两个缺陷，已修正：
+          #   1) 用 stat -c %Y 判断过期 → CI 每次 fresh checkout，mtime 恒为当前时间，
+          #      判断永远不成立，daily.html 会长期停留在某次历史快照；
+          #   2) 用 current.html 覆盖 daily.html → 「当日汇总」页会显示成「当前榜单」，
+          #      报告类型和生成时间都对不上，属于内容欺骗。
+          # 修正后：从报告内容解析生成时间判断是否过期，过期则真实补生成一份当日汇总。
+          need_daily=0
+          if [ ! -f docs/reports/latest/daily.html ]; then
+            need_daily=1
+            echo "daily.html 不存在，需生成"
+          else
+            # 从报告正文提取生成时间判断是否过期（不能用 stat 的 mtime，CI 每次都是
+            # fresh checkout，mtime 恒为当前时间）。脚本退出码：0=新鲜，1=需要补生成。
+            python3 scripts/check_daily_freshness.py
+            need_daily=$?
           fi
+
+          if [ "$need_daily" -ne 0 ]; then
+            # 关闭调度覆盖，强制以 daily 模式跑一次，生成真正的当日汇总
+            echo "补生成当日汇总（SCHEDULE_ENABLED=false REPORT_MODE=daily）"
+            SCHEDULE_ENABLED=false REPORT_MODE=daily uv run python -m trendradar
+            cp -r output/html/. docs/reports/
+            python3 scripts/gen_daily_index.py
+            python3 scripts/gen_archive.py
+          fi
+
           git add docs/reports/
           if git diff --cached --quiet; then
             echo "no changes to publish"

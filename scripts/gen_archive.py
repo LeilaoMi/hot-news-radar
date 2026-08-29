@@ -9,20 +9,32 @@ from pathlib import Path
 from datetime import datetime
 
 BASE = Path("docs/reports")
+DOCS = Path("docs")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
-NAV_HTML = (
+# 导航条模板：{p} 为相对前缀，由 _nav_for() 按页面实际层级填充。
+# 说明：站点部署在 GitHub Pages 子路径（/hot-news-radar/），绝对路径 "/" 会指向域名根导致 404，
+# 而快照页分布在 reports/<date>/、reports/latest/、reports/ 等不同层级，必须逐页计算相对前缀。
+NAV_TEMPLATE = (
     '<div id="rdr-nav" style="position:sticky;top:0;z-index:9999;background:#1a2233;'
     'color:#fff;padding:8px 16px;font-size:13px;display:flex;gap:18px;align-items:center;'
     'font-family:-apple-system,\'PingFang SC\',sans-serif">'
-    '<a href="/" style="color:#79c0ff;text-decoration:none;font-weight:600">&#127919; 新闻中心</a>'
-    '<a href="/reports/archive.html" style="color:#d2a8ff;text-decoration:none">&#128193; 历史</a>'
-    '<a href="/reports/latest/daily.html" style="color:#7ee787;text-decoration:none">&#128202; 当日汇总</a>'
-    '<a href="/editor.html" style="color:#ffa657;text-decoration:none">&#9881; 配置</a>'
+    '<a href="{p}" style="color:#79c0ff;text-decoration:none;font-weight:600">&#127919; 新闻中心</a>'
+    '<a href="{p}reports/archive.html" style="color:#d2a8ff;text-decoration:none">&#128193; 历史</a>'
+    '<a href="{p}reports/latest/daily.html" style="color:#7ee787;text-decoration:none">&#128202; 当日汇总</a>'
+    '<a href="{p}editor.html" style="color:#ffa657;text-decoration:none">&#9881; 配置</a>'
     '<span style="margin-left:auto;opacity:.55">Hot News Radar</span>'
     '</div>'
-    ''
 )
+
+
+def _nav_for(html_path):
+    """按页面所在层级生成相对路径导航条"""
+    try:
+        depth = len(html_path.relative_to(DOCS).parts) - 1
+    except ValueError:
+        depth = 1
+    return NAV_TEMPLATE.format(p="../" * depth if depth > 0 else "./")
 
 SEARCH_JS = (
     '<script>document.getElementById("q").addEventListener("change",function(){'
@@ -35,15 +47,59 @@ SEARCH_JS = (
     'd.style.outline="3px solid #0969da";'
     'd.scrollIntoView({behavior:"smooth",block:"start"});'
     'setTimeout(function(){d.style.outline=""},2200);return;}}'
-    'alert("未找到 "+v+"（当天无快照）");});</script>'
+    # 未命中时用页内提示条代替 alert()：alert 会阻塞页面且样式与站点割裂
+    'var q=document.getElementById("q");'
+    'var tip=document.getElementById("q-tip");'
+    'if(!tip){tip=document.createElement("div");tip.id="q-tip";'
+    'tip.style.cssText="margin:8px 0 0;padding:9px 14px;background:#fff5f5;'
+    'color:#cf222e;border:1px solid #ffcecb;border-radius:8px;font-size:13px";'
+    'q.parentNode.appendChild(tip);}'
+    'tip.textContent="未找到 "+v+" —— 当天没有快照，换个日期试试";'
+    'setTimeout(function(){tip.remove()},3200);});</script>'
 )
 
+# 折叠/展开按钮 —— 注入到全部快照页
+# 历史缺陷（本脚本原为 1300 字符单行字符串，藏了 3 个 bug）：
+#   1) cssText 赋值后缺分号            → SyntaxError: Unexpected token 'var'
+#   2) forEach 的 } 与 ) 顺序写反      → SyntaxError: missing ) after argument list
+#   3) btn 创建后从未 appendChild      → 按钮根本不显示
+# 改为多行可读形式，并由 scripts/test_injected_js.py 做语法回归，防止再次退化。
 COLLAPSE_JS = (
-    '<script>(function(){var btn=document.createElement("button");btn.id="rdr-fold";btn.innerHTML="&#9776; 折叠分组";btn.style.cssText="position:fixed;bottom:20px;right:20px;z-index:9999;background:#f0f6ff;color:#0969da;border:1px solid #d0d7de;border-radius:20px;padding:8px 16px;font-size:13px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.08);font-family:inherit"var folded=false;btn.onclick=function(){folded=!folded;this.innerHTML=folded?"&#9776; 展开全部分组":"&#9776; 折叠分组";document.querySelectorAll("details").forEach(function(d){folded?d.removeAttribute("open"):d.setAttribute("open","")});var groups=document.querySelectorAll(".feed-group, .group-header, section");groups.forEach(function(g){var kids=g.querySelectorAll(".news-item, .rss-item, .item");if(kids.length>8){kids.forEach(function(k,i){if(folded&&i>=5){k.style.display="none"}else{k.style.display=""}});var more=g.querySelector(".rdr-more");if(!more&&kids.length>8){more=document.createElement("div");more.className="rdr-more";more.style.cssText="text-align:center;padding:10px;color:#0969da;font-size:13px;cursor:pointer";g.appendChild(more)}if(folded){more.textContent="下拉显示全部 "+kids.length+" 条 ↓";more.onclick=function(){kids.forEach(function(k){k.style.display=""});more.remove()}}else if(more.parentNode){more.parentNode.removeChild(more)}}}})})();</script>'
+    '<script>'
+    '(function(){'
+    'var btn=document.createElement("button");'
+    'btn.id="rdr-fold";'
+    'btn.innerHTML="&#9776; 折叠分组";'
+    'btn.style.cssText="position:fixed;bottom:20px;right:20px;z-index:9999;'
+    'background:#f0f6ff;color:#0969da;border:1px solid #d0d7de;border-radius:20px;'
+    'padding:8px 16px;font-size:13px;cursor:pointer;'
+    'box-shadow:0 2px 8px rgba(0,0,0,.08);font-family:inherit";'
+    'document.body.appendChild(btn);'
+    'var folded=false;'
+    'btn.onclick=function(){'
+    'folded=!folded;'
+    'this.innerHTML=folded?"&#9776; 展开全部分组":"&#9776; 折叠分组";'
+    'document.querySelectorAll("details").forEach(function(d){'
+    'folded?d.removeAttribute("open"):d.setAttribute("open","");});'
+    'document.querySelectorAll(".feed-group, .group-header, section").forEach(function(g){'
+    'var kids=g.querySelectorAll(".news-item, .rss-item, .item");'
+    'if(kids.length<=8)return;'
+    'kids.forEach(function(k,i){k.style.display=(folded&&i>=5)?"none":"";});'
+    'var more=g.querySelector(".rdr-more");'
+    'if(!more){more=document.createElement("div");more.className="rdr-more";'
+    'more.style.cssText="text-align:center;padding:10px;color:#0969da;'
+    'font-size:13px;cursor:pointer";g.appendChild(more);}'
+    'if(folded){'
+    'more.textContent="下拉显示全部 "+kids.length+" 条 \u2193";'
+    'more.onclick=function(){kids.forEach(function(k){k.style.display="";});more.remove();};'
+    '}else if(more.parentNode){'
+    'more.parentNode.removeChild(more);}'
+    '});'
+    '};'
+    '})();'
+    '</script>'
 )
 SEARCHBAR_JS = (    '<div id="rdr-search" style="position:sticky;top:44px;z-index:9997;width:min(420px,86vw);margin:10px auto;display:block"><input id="rdr-q" placeholder="&#128269; 在本页过滤标题…" style="width:100%;padding:9px 15px;font-size:13.5px;border:1px solid rgba(0,0,0,.12);border-radius:20px;outline:none;background:rgba(255,255,255,.92);backdrop-filter:blur(10px);box-shadow:0 2px 10px rgba(0,0,0,.08);font-family:inherit"><span id="rdr-hit" style="position:absolute;right:14px;top:9px;font-size:12px;color:#0969da"></span></div><script>(function(){var q=document.getElementById("rdr-q"),hit=document.getElementById("rdr-hit");if(!q)return;var pre=new URLSearchParams(location.search).get("q");function apply(kw){var items=document.querySelectorAll(".news-item,.rss-item,.item");var n=0;items.forEach(function(it){var t=it.textContent.toLowerCase();var ok=!kw||t.indexOf(kw)>-1;it.style.display=ok?"":"none";if(ok&&kw)n++;});hit.textContent=kw?(n+" 条命中"):"";}q.addEventListener("input",function(){apply(this.value.trim().toLowerCase())});if(pre){q.value=pre;apply(pre.toLowerCase())}})();</script>')
-def esc(s):
-    return s.replace("&","&").replace("<","<").replace(">",">")
 
 def collect():
     days = {}
@@ -74,6 +130,19 @@ def build_html(days):
         extra.sort(reverse=True)
     total = sum(len(v) for v in days.values()) + len(extra)
     peak = max((len(v) for v in days.values()), default=0)
+
+    # 「更早归档」入口仅在 older.html 真实存在时展示（该文件由 gen_daily_index.py 生成）；
+    # 原文案「90 天前的更早日汇总」语义含混，改为「查看 90 天以前的历史归档」。
+    older_link = ""
+    if (BASE / "older.html").exists():
+        older_link = (
+            '<p style="text-align:center;margin-top:14px">'
+            '<a href="older.html" style="color:#0969da;font-size:14px">'
+            '&#128230; 查看 90 天以前的历史归档'
+            + (f'（{len(extra)} 天）' if extra else '')
+            + ' &#8594;</a></p>'
+        )
+
     css_extra = (
         ".search-wrap{max-width:900px;margin:0 auto;padding:0 20px 14px}"
         "#q{width:100%;padding:11px 16px;font-size:15px;border:1px solid #d7e2fb;"
@@ -107,16 +176,21 @@ def build_html(days):
         'a.t:hover{background:#dbe7fc}'
         'footer{text-align:center;padding:24px;font-size:12px;color:#999}'
         'details[open] .day-h{border-bottom-color:#eee}' + css_extra +
-        '</style></head><body>' + NAV_HTML +
+        '</style></head><body>' + _nav_for(BASE / "archive.html") +
         '<header><h1>&#128225; 热点雷达 · 历史归档</h1>'
         '<p>每小时自动抓取的多平台热点快照，永久保存</p></header>'
-        '<div class="search-wrap"><input id="q" type="date"></div><main>'
+        # 原生 date 控件在英文语言浏览器下占位符显示为 mm/dd/yyyy，与中文页面不一致，
+        # 故补一行说明文案 + title/aria-label，明确「格式」与「用途」。
+        '<div class="search-wrap">'
+        '<label for="q" style="display:block;font-size:12.5px;color:#666;'
+        'margin:0 0 6px 2px">&#128197; 按日期定位（年-月-日，如 2025-08-29）</label>'
+        '<input id="q" type="date" title="选择日期后跳转到当天快照" '
+        'aria-label="按日期定位快照"></div><main>'
         '<div class="stats">'
         '<div class="stat"><b>' + str(len(days)) + '</b><span>覆盖天数</span></div>'
         '<div class="stat"><b>' + str(total) + '</b><span>快照总数</span></div>'
         '<div class="stat"><b>' + str(peak) + '</b><span>单日峰值</span></div>'
-        '</div>'
-        '<p style="text-align:center;margin-top:14px"><a href="older.html" style="color:#0969da;font-size:14px">&#128230; 90 天前的更早日汇总 &#8594;</a></p>'
+        '</div>' + older_link
     )
     PAGE_SIZE = 30
     day_items = list(days.items())
@@ -178,7 +252,7 @@ def inject_nav(html_path):
 
     missing = []
     if "rdr-nav" not in s:
-        missing.append(NAV_HTML)
+        missing.append(_nav_for(html_path))
     if "rdr-fold" not in s:
         missing.append(COLLAPSE_JS)
     if "rdr-search" not in s:

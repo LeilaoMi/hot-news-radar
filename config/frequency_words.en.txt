@@ -3,7 +3,7 @@
 #                         Version: 1.1.0
 # ═══════════════════════════════════════════════════════════════
 
-# Visual config editor: https://sansan0.github.io/TrendRadar/
+# Visual config editor: https://leilaomi.github.io/hot-news-radar/
 #
 # Lines beginning with # are comments only.
 #

@@ -51,7 +51,8 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: wantcat/trendradar
+          # 动态拼镜像名：原先硬编码为上游作者 wantcat 的仓库，会导致推送失败
+          images: ${{ env.REGISTRY }}/${{ secrets.DOCKERHUB_USERNAME }}/trendradar
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -113,7 +114,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: wantcat/trendradar-mcp
+          images: ${{ env.REGISTRY }}/${{ secrets.DOCKERHUB_USERNAME }}/trendradar-mcp
           tags: |
             type=raw,value=${{ steps.version.outputs.version }}
             type=raw,value=${{ steps.version.outputs.major_minor }}

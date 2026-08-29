@@ -15,23 +15,21 @@ import requests
 
 logger = logging.getLogger(__name__)
 
+# 从任意 GitHub raw 链接里提取 owner/repo/path，而不是写死某一个仓库。
+# 这样把 version_check_url 指向自己的仓库后，CDN 多源回退依然可用
+# （raw.githubusercontent.com 在国内经常被墙，jsDelivr 回退非常关键）。
 _GITHUB_RAW_PATTERN = re.compile(
-    r"^https://raw\.githubusercontent\.com/sansan0/TrendRadar/(?:refs/heads/)?master/(.+)$"
+    r"^https://raw\.githubusercontent\.com/"
+    r"(?P<owner>[^/]+)/(?P<repo>[^/]+)/"
+    r"(?:refs/heads/)?(?P<branch>[^/]+)/(?P<path>.+)$"
 )
 
-_ALL_SOURCES = [
-    "https://raw.githubusercontent.com/sansan0/TrendRadar/refs/heads/master/",
-    "https://fastly.jsdelivr.net/gh/sansan0/TrendRadar@master/",
-    "https://cdn.jsdelivr.net/gh/sansan0/TrendRadar@master/",
-    "https://gcore.jsdelivr.net/gh/sansan0/TrendRadar@master/",
+_CDN_TEMPLATES = [
+    ("https://raw.githubusercontent.com/{owner}/{repo}/refs/heads/{branch}/", "GitHub"),
+    ("https://fastly.jsdelivr.net/gh/{owner}/{repo}@{branch}/", "fastly.jsdelivr.net"),
+    ("https://cdn.jsdelivr.net/gh/{owner}/{repo}@{branch}/", "cdn.jsdelivr.net"),
+    ("https://gcore.jsdelivr.net/gh/{owner}/{repo}@{branch}/", "gcore.jsdelivr.net"),
 ]
-
-_SOURCE_LABELS = {
-    _ALL_SOURCES[0]: "GitHub",
-    _ALL_SOURCES[1]: "fastly.jsdelivr.net",
-    _ALL_SOURCES[2]: "cdn.jsdelivr.net",
-    _ALL_SOURCES[3]: "gcore.jsdelivr.net",
-}
 
 _HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -44,9 +42,17 @@ _TIMEOUT = 5
 _state = {"last_ok": 0}
 
 
-def _extract_path(url: str) -> Optional[str]:
+def _extract_path(url: str):
+    """解析 GitHub raw 链接，返回 (sources, labels, path)；非 GitHub 链接返回 None。"""
     m = _GITHUB_RAW_PATTERN.match(url)
-    return m.group(1) if m else None
+    if not m:
+        return None
+    owner, repo, branch, path = (
+        m.group("owner"), m.group("repo"), m.group("branch"), m.group("path"),
+    )
+    sources = [tpl.format(owner=owner, repo=repo, branch=branch) for tpl, _ in _CDN_TEMPLATES]
+    labels = {src: label for src, (_, label) in zip(sources, _CDN_TEMPLATES)}
+    return sources, labels, path
 
 
 def _do_request(url: str, proxies: Optional[dict]) -> str:
@@ -62,30 +68,29 @@ def fetch_with_fallback(
     """从上次成功的源开始轮转尝试，非 GitHub 链接直接请求。"""
     proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
 
-    path = _extract_path(url)
-    if path is None:
+    parsed = _extract_path(url)
+    if parsed is None:
         try:
             return _do_request(url, proxies)
         except Exception as e:
             logger.warning("[版本检查] 获取失败: %s", e)
             return None
 
-    n = len(_ALL_SOURCES)
+    sources, labels, path = parsed
+    n = len(sources)
     start = _state["last_ok"]
 
     for offset in range(n):
         idx = (start + offset) % n
-        source = _ALL_SOURCES[idx]
+        source = sources[idx]
         try:
             content = _do_request(source + path, proxies)
             if idx != start:
-                label = _SOURCE_LABELS.get(source, source)
-                logger.info("[版本检查] 已切换到: %s", label)
+                logger.info("[版本检查] 已切换到: %s", labels.get(source, source))
             _state["last_ok"] = idx
             return content
         except Exception:
-            label = _SOURCE_LABELS.get(source, source)
-            logger.debug("[版本检查] %s 不可用，尝试下一个源", label)
+            logger.debug("[版本检查] %s 不可用，尝试下一个源", labels.get(source, source))
 
     logger.warning("[版本检查] 所有源均不可用")
     return None
