@@ -60,6 +60,26 @@ jobs:
           persist-credentials: true
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # ── 把历史报告拉到 docs/reports/ ───────────────────────────────────
+      # 报告已迁到独立的 reports 分支（Pages 发布源），master 不再存放。
+      # 但 gen_archive.py / retention.py / gen_daily_index.py 需要遍历全部
+      # 历史目录才能生成归档页和做保留期清理，所以这里先把历史拉回来，
+      # 这样下游脚本一行都不用改。
+      #
+      # 拉的是 reports 分支，与最终发布目标一致，不存在「从旧位置读到脏数据」的可能。
+      - name: Restore historical reports from reports branch
+        if: success()
+        run: |
+          set -e
+          git clone --depth 1 --branch reports \
+            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" \
+            /tmp/pages-content
+          rm -rf docs/reports
+          mkdir -p docs
+          mv /tmp/pages-content/reports docs/reports
+          rm -rf /tmp/pages-content
+          echo "历史报告就位：$(ls docs/reports | wc -l) 个条目"
+
       - name: Set up Python
         if: success()
         uses: actions/setup-python@v6
@@ -173,32 +193,28 @@ jobs:
             python3 scripts/gen_archive.py
           fi
 
-          git add docs/reports/
-          if git diff --cached --quiet; then
-            echo "no changes to publish"
-          else
-            git commit -m "auto: publish reports $(TZ=Asia/Shanghai date +%Y-%m-%d-%H%M)"
-            git pull --rebase origin master || true
-            git push origin master
-          fi
+          # 本步骤到此为止，不再向 master 提交任何东西。
+          # 报告已迁到 reports 分支（Pages 发布源），由下面的 Sync 步骤提交。
+          # 这里不能留 git add docs/reports/ —— master 的 .gitignore 已忽略该目录，
+          # 在 set -e 下 `git add` 会因 "pathspec did not match" 直接终止整个步骤。
+          echo "报告已就绪于 docs/reports/，等待 Sync 步骤提交到 reports 分支"
 
-      # ── 同步 docs/ 到 reports 分支（双写观察期）────────────────────────
-      # 目的：把 Pages 内容（静态壳 + 报告）同步到独立的 reports 分支，为后续
-      # 把 Pages 发布源切过去、让 master 只留代码做准备。
+      # ── 提交到 reports 分支（Pages 发布源）─────────────────────────────
+      # Pages 现在从 reports 分支根目录读取，这一步就是网站的发布动作。
       #
-      # 为什么走 Git Data API 而不是 git push：reports 分支检出后 169 MB，
-      # 在 CI 里 clone 下来再提交会拖慢每次运行。该脚本直接复用 master 已有的
-      # blob 对象重建 tree，是纯指针操作，零上传；retention 清掉的旧快照不在
-      # 新 tree 里，等于自动完成删除。
+      # 为什么走 Git Data API 而不是 git commit/push：上面只是把 reports 分支
+      # clone 到了 docs/reports/，工作副本的 git 元数据仍指向 master，没法直接
+      # 提交到 reports 分支。脚本会先在本地算出每个文件的 git blob sha，与分支
+      # 当前内容比对，只上传真正变化的文件（通常几份快照约 2 MB），未变化的由
+      # base_tree 原样保留；retention 清掉的旧快照用 sha=null 删除。
       #
-      # 本阶段 master 仍是 Pages 的发布源，此步骤不改变线上内容；用
-      # continue-on-error 隔离，同步失败不影响发布结果与后续 Cloudflare 部署。
+      # 这里是网站更新的关键路径，因此**不设** continue-on-error：同步失败必须
+      # 让 workflow 失败并触发末尾的 Notify on failure，而不是静默跳过。
       - name: Sync docs/ to reports branch
         if: success()
-        continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python3 scripts/sync_reports_branch.py
+        run: python3 scripts/sync_reports_branch.py --from-dir=docs
 
       # --------------------------------------------------------------------------------
       # ☁️ CLOUDFLARE PAGES DEPLOY / 部署到 Cloudflare Pages（可选）

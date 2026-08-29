@@ -7,3 +7,9 @@ __pycache__/
 .env
 output/
 !docker/.env.example
+
+# 报告快照已迁到独立的 reports 分支（GitHub Pages 的发布源），不再进 master。
+# 这些文件检出后有 169 MB 且每天还在增长，留在 master 会拖慢 clone 与 CI 检出。
+# CI 运行时会先从 reports 分支把历史拉回 docs/reports/，脚本照常读写该目录，
+# 因此忽略它不影响归档页生成与保留期清理。
+docs/reports/
