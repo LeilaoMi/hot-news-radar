@@ -156,11 +156,12 @@ jobs:
           if [ ! -f docs/reports/latest/daily.html ]; then
             need_daily=1
             echo "daily.html 不存在，需生成"
-          else
+          elif ! python3 scripts/check_daily_freshness.py; then
             # 从报告正文提取生成时间判断是否过期（不能用 stat 的 mtime，CI 每次都是
-            # fresh checkout，mtime 恒为当前时间）。脚本退出码：0=新鲜，1=需要补生成。
-            python3 scripts/check_daily_freshness.py
-            need_daily=$?
+            # fresh checkout，mtime 恒为当前时间）。
+            # 必须写成 if/elif 的条件：本步骤开头有 set -e，若先直接调用再取 $?，
+            # 脚本返回 1（语义是"需要补生成"）会被 set -e 判定为失败并立刻终止整个步骤。
+            need_daily=1
           fi
 
           if [ "$need_daily" -ne 0 ]; then
