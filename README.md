@@ -25,6 +25,7 @@
 - [每日时间线](#每日时间线)
 - [AI 能力说明](#ai-能力说明)
 - [历史归档](#历史归档)
+- [分支架构](#分支架构)
 - [部署指南](#部署指南)
 - [配置详解](#配置详解)
 - [目录结构](#目录结构)
@@ -54,7 +55,7 @@
 | [🏠 新闻中心（门户）](https://leilaomi.github.io/hot-news-radar/) | **统一入口**：今日热榜 / 当日汇总 / 历史归档 / 配置编辑器 |
 | [🔥 今日实时热榜](https://leilaomi.github.io/hot-news-radar/reports/latest/current.html) | 最近一轮全平台热点（每小时更新，右下角一键展开/收起）|
 | [📊 当日汇总](https://leilaomi.github.io/hot-news-radar/reports/latest/daily.html) | 全天累计去重视图 + AI 分析 |
-| [🗂️ 历史归档](https://leilaomi.github.io/hot-news-radar/reports/archive.html) | 93 天 1000+ 快照按日期分组，任意页带导航条可跳转 |
+| [🗂️ 历史归档](https://leilaomi.github.io/hot-news-radar/reports/archive.html) | 97 个采集日 / 1014 份快照按日期分组，任意页带导航条可跳转 |
 | [⚙️ 配置编辑器](https://leilaomi.github.io/hot-news-radar/editor.html) | 网页端编辑时间线 / 关键词 / RSS 源 |
 
 > 全站每一页顶部都有粘性导航条：`🎯 新闻中心 · 🗂 历史 · 📊 当日汇总 · ⚙️ 配置`
@@ -120,7 +121,8 @@ GitHub Actions (cron :33 每小时)
 ┌─ 输出层 ─────────────────────────────┐
 │ output/html/YYYY-MM-DD/HH-MM.html 快照 │
 │ scripts/gen_archive.py → 归档索引页     │
-│ git push → GitHub Pages 在线浏览        │
+│ sync_reports_branch.py → reports 分支    │
+│   → GitHub Pages 在线浏览               │
 │ 推送渠道: 飞书/TG/邮件/Bark/ntfy...     │
 └──────────────────────────────────────┘
 ```
@@ -155,10 +157,47 @@ GitHub Actions (cron :33 每小时)
 ## 历史归档
 
 - **入口**：[新闻中心门户](https://leilaomi.github.io/hot-news-radar/) → 🗂️ 历史归档
-- 每小时快照自动存入 `docs/reports/YYYY-MM-DD/HH-MM.html`
+- 每小时快照按 `YYYY-MM-DD/HH-MM.html` 归档（当前 97 个采集日 / 1014 份快照）
 - 归档页由 `scripts/gen_archive.py` 在每轮发布时重新生成：
   按日期折叠分组、显示覆盖天数/快照总数/单日峰值统计
-- 数据永久保留（受限于仓库体积，未来可加自动清理旧于 N 天的策略）
+- **分层保留策略**（`scripts/retention.py`，默认 `KEEP_FULL_DAYS=90`）：
+
+  | 数据 | 保留方式 |
+  |---|---|
+  | 90 天内 | 保留全部小时级快照 |
+  | 超过 90 天 | 仅保留当日 `daily.html` 聚合页，删除小时级明细 |
+  | 永久保留 | `archive.html` 索引、`feed.xml`、`reports/latest/` |
+
+  超出保留期后，当日的快照归档页会自动注入来源说明，标明它是
+  「当前榜单快照」而非「当日汇总」报告，避免误读。
+
+> 快照文件不存放在 `master` 分支，详见下一节。
+
+## 分支架构
+
+本项目采用**代码与数据分离**的双分支结构：
+
+| 分支 | 内容 | 体积 | 说明 |
+|---|---|---|---|
+| `master` | 代码 + `docs/` 静态壳 | 约 9.6 MB | 开发分支，`docs/reports/` 已在 `.gitignore` 中 |
+| `reports` | 全部报告快照 | 约 174 MB | GitHub Pages 的发布源，每次同步为一条孤儿提交 |
+
+**为什么要分开**：报告每天新增约 1 MB，此前全部堆在 `master` 会让
+`git clone` 的成本随时间线性增长，也让提交历史被每日自动提交淹没。
+迁移后 `master` 检出体积从 181 MB 降到 9.6 MB，提交列表只保留真实的代码变更。
+
+**CI 如何在没有历史的情况下工作**：`crawler.yml` 在生成报告前，会先执行
+「Restore historical reports」步骤，把 `reports` 分支浅克隆回 `docs/reports/`，
+因此 `gen_archive.py`、`retention.py` 等依赖全量历史的脚本行为不变。
+报告生成完毕后，由 `scripts/sync_reports_branch.py --from-dir=docs` 同步回
+`reports` 分支；该脚本会先本地计算 git blob SHA 与远端比对，**只上传真正变更的文件**。
+
+如需本地查看历史报告：
+
+```bash
+git clone --depth 1 --branch reports \
+  https://github.com/LeilaoMi/hot-news-radar.git reports-only
+```
 
 ## 部署指南
 
@@ -223,29 +262,45 @@ rss:
 ```
 hot-news-radar/
 ├── .github/workflows/
-│   ├── crawler.yml          # 主流程：抓取→AI→报告→发布→推送
+│   ├── crawler.yml          # 主流程：抓取→AI→报告→发布→同步
+│   ├── test.yml             # 单元测试 + 回归检查
+│   ├── docker.yml           # 镜像构建
+│   ├── issue-guard.yml      # Issue 模板守卫
 │   └── clean-crawler.yml    # （已弃用的签到机制占位）
 ├── trendradar/              # 核心 Python 引擎（来自上游 v6.10.0）
-│   ├── ai/                  #   AI 客户端/筛选管线/翻译/格式化
+│   ├── ai/                  #   AI 客户端/筛选管线/翻译/格式化/分析服务
 │   ├── core/                #   配置加载/调度器/频率词解析
-│   ├── crawler/             #   热榜抓取 + RSS 解析
+│   ├── crawler/             #   热榜抓取 + RSS 处理器
 │   ├── notification/        #   多渠道推送分发
-│   ├── report/              #   HTML/Markdown 报告渲染
+│   ├── report/              #   HTML/Markdown 报告渲染 + 数据准备
 │   ├── storage/             #   SQLite 存储 + guid 去重
 │   └── commands/            #   doctor/status/version 运维命令
 ├── mcp_server/              # MCP Server（可接 Cherry Studio 等）
+├── tests/                   # 112 个单元测试（时间/词频/存储/新鲜度/通知判定）
 ├── scripts/
-│   └── gen_archive.py       # 归档索引页生成器（本项目新增）
+│   ├── gen_archive.py       # 归档索引页生成器
+│   ├── gen_daily_index.py   # 当日索引页
+│   ├── gen_feed.py          # RSS feed 生成
+│   ├── build_trends.py      # 趋势洞察页
+│   ├── retention.py         # 分层保留策略（90 天）
+│   ├── sync_reports_branch.py  # 增量同步 docs/ 到 reports 分支
+│   ├── check_daily_freshness.py # 校验当日汇总新鲜度
+│   ├── regression_check.py  # 四合一回归检查（单测/语法/导入/抓取）
+│   ├── test_injected_js.py  # 注入脚本校验
+│   └── test_web_pages.py    # 页面可用性校验
 ├── config/                  # 所有用户配置（见上表）
 ├── docs/
 │   ├── index.html           # 站点门户（新闻中心）
 │   ├── editor.html          # 可视化配置编辑器
-│   ├── reports/             # 每小时快照存档（自动增长）
+│   ├── reports/             # 运行时目录，已被 .gitignore 忽略
 │   └── assets/              # 编辑器静态资源
 ├── docker/                  # Docker 部署相关
 ├── index.html               # 最新报告页（Actions 自动更新）
 └── version*                 # 引擎版本追踪文件
 ```
+
+> `docs/reports/` 在 CI 运行时由 `reports` 分支还原，本地不入库。
+> 完整报告快照见 [`reports` 分支](https://github.com/LeilaoMi/hot-news-radar/tree/reports)。
 
 ## 常见问题
 
@@ -267,6 +322,16 @@ A: 快照数量取决于当天的调度窗口与 GitHub Actions 偶发的排队�
 **Q: 如何彻底删除签到机制残留？**
 A: 已删除 workflow 内的检查逻辑，`.github/workflows/clean-crawler.yml`
 只剩注释占位，可直接删除该文件不影响任何功能。
+
+**Q: 克隆下来的仓库里为什么没有历史报告？**
+A: 报告在 `reports` 分支，`master` 只放代码。`docs/reports/` 已被 `.gitignore`
+忽略，CI 运行时才会从 `reports` 分支还原。需要历史数据就
+`git clone --depth 1 --branch reports ...`，或直接浏览线上归档页。
+
+**Q: 当日汇总显示的"生成时间"是真实时间吗？**
+A: 是。页面顶部的时间戳取自本轮抓取，与 Actions 运行时段一致。
+CI 每轮会先用 `scripts/check_daily_freshness.py` 解析报告正文里的时间戳校验新鲜度，
+过期则真实重跑 `REPORT_MODE=daily`，不再用拷贝兜底。
 
 ## 致谢与许可
 
