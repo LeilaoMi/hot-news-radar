@@ -1473,8 +1473,8 @@ class SQLiteStorageMixin:
                         now_str,
                     ))
                     count += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[AI筛选] 记录已分析新闻失败 [news_item_id={nid}]: {e}")
 
             conn.commit()
             return count

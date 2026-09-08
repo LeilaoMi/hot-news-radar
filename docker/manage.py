@@ -178,7 +178,7 @@ def show_status():
                         crontab_content = f.read().strip()
                         print(f"         内容: {crontab_content}")
                 except Exception:
-                    pass
+                    pass  # 诊断信息读取失败不影响检查结果
         else:
             print(f"    ❌ {description}: 不存在")
 
@@ -611,7 +611,7 @@ def stop_webserver():
         try:
             os.remove(WEBSERVER_PID_FILE)
         except Exception:
-            pass
+            pass  # PID 文件清理失败可忽略，主流程错误已记录
 
 
 def webserver_status():

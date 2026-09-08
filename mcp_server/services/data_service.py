@@ -601,7 +601,7 @@ class DataService:
                 with open(version_file, "r") as f:
                     version = f.read().strip()
             except (OSError, ValueError):
-                pass
+                pass  # 读取失败时保持 unknown，不影响健康检查结果
 
         return {
             "system": {

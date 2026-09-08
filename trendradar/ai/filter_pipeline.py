@@ -62,7 +62,7 @@ class AIFilterPipeline:
                 try:
                     result[feed_id] = int(max_age)
                 except (ValueError, TypeError):
-                    pass
+                    log.warning(f"[AI筛选] feed {feed_id} 的 max_age_days 配置无效: {max_age!r}，已忽略该配置")
         return result
 
     def run(self, interests_file: Optional[str] = None) -> Optional[AIFilterResult]:

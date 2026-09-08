@@ -365,7 +365,7 @@ class RSSProcessor:
                 try:
                     feed_max_age_map[feed_id] = int(max_age)
                 except (ValueError, TypeError):
-                    pass
+                    log.warning(f"[RSS] feed {feed_id} 的 max_age_days 配置无效: {max_age!r}，已忽略该配置")
 
         for feed_id, items in items_dict.items():
             # 确定此 feed 的 max_age_days
