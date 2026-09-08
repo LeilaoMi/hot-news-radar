@@ -318,6 +318,21 @@ def _load_ai_translation_config(config_data: Dict) -> Dict:
     }
 
 
+def _load_ai_dedup_config(config_data: Dict) -> Dict:
+    """加载 AI 语义去重配置（功能配置，模型配置见 _load_ai_config）"""
+    dedup_config = config_data.get("ai_dedup", {})
+
+    enabled_env = _get_env_bool("AI_DEDUP_ENABLED")
+
+    return {
+        "ENABLED": enabled_env if enabled_env is not None else dedup_config.get("enabled", False),
+        "PROMPT_FILE": dedup_config.get("prompt_file", "ai_dedup_prompt.txt"),
+        "BATCH_SIZE": dedup_config.get("batch_size", 30),
+        "BATCH_INTERVAL": dedup_config.get("batch_interval", 2),
+        "CACHE_ENABLED": dedup_config.get("cache_enabled", True),
+    }
+
+
 def _load_ai_filter_config(config_data: Dict) -> Dict:
     """加载 AI 智能筛选配置（由 filter.method 控制是否启用）"""
     ai_filter = config_data.get("ai_filter", {})
@@ -593,6 +608,9 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
 
     # AI 智能筛选配置
     config["AI_FILTER"] = _load_ai_filter_config(config_data)
+
+    # AI 语义去重配置
+    config["AI_DEDUP"] = _load_ai_dedup_config(config_data)
 
     # 筛选策略配置
     config["FILTER"] = _load_filter_config(config_data)

@@ -27,6 +27,7 @@ from trendradar.storage import convert_crawl_results_to_news_data
 from trendradar.utils.time import DEFAULT_TIMEZONE
 from trendradar.ai import AIAnalysisResult
 from trendradar.ai.analysis_service import AIAnalysisService
+from trendradar.ai.dedup import AIDeduplicator
 from trendradar.core.scheduler import ResolvedSchedule
 from trendradar.commands import check_all_versions, run_doctor, run_test_notification, handle_status_commands
 from trendradar.commands.version import _fetch_remote_version, _parse_version
@@ -387,6 +388,13 @@ class NewsAnalyzer:
                 self.ctx.weight_config,
                 self.ctx.rank_threshold,
             )
+
+        # 多源同事件语义去重（默认关闭；在统计/筛选后、AI 分析前执行，
+        # HTML 与推送共用同一份去重结果，AI 分析也基于去重后数据）
+        dedup_config = self.ctx.config.get("AI_DEDUP", {})
+        if dedup_config.get("ENABLED", False) and stats:
+            deduplicator = AIDeduplicator(dedup_config, self.ctx.config.get("AI", {}))
+            stats = deduplicator.dedup_stats(stats)
 
         # AI 分析（如果启用，用于 HTML 报告）
         ai_result = None
