@@ -39,3 +39,17 @@ addopts = "-q --strict-markers"
 markers = [
     "slow: 耗时较长的测试（默认不跳过）",
 ]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+exclude = ["docs", "output", "scripts"]
+
+[tool.ruff.lint]
+# 宽松起步：pyflakes 全量（未用导入/未定义名/格式化占位错误等）+ 少量 pycodestyle。
+# 后续可渐进加入 "I"（isort）、"B"（bugbear）、"UP"（pyupgrade）。
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# 测试夹具允许未使用导入
+"tests/*" = ["F401"]

@@ -327,7 +327,7 @@ class SystemManagementTools:
         # 遍历每个平台
         for platform_id, titles_data in results.items():
             platform_name = id_to_name.get(platform_id, platform_id)
-            html += f'        <div class="platform">\n'
+            html += '        <div class="platform">\n'
             html += f'            <div class="platform-name">{platform_name}</div>\n'
 
             # 排序标题
@@ -343,7 +343,7 @@ class SystemManagementTools:
 
             # 显示新闻
             for rank, title, url, mobile_url in sorted_items:
-                html += f'            <div class="news-item">\n'
+                html += '            <div class="news-item">\n'
                 html += f'                <span class="rank">{rank}.</span>\n'
                 html += f'                <span class="title">{self._html_escape(title)}</span>\n'
                 if url:
@@ -407,7 +407,6 @@ class SystemManagementTools:
             >>> print(result['data']['any_update'])
         """
         import yaml
-        import requests
 
         def parse_version(version_str: str):
             """将版本号字符串解析为元组"""

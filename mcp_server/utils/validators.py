@@ -98,7 +98,7 @@ def _parse_string_to_int(value: str, param_name: str = "参数") -> int:
     except ValueError:
         raise InvalidParameterError(
             f"{param_name} 必须是整数，无法解析: {value}",
-            suggestion=f"请提供有效的整数值，如: 10, 50, 100"
+            suggestion="请提供有效的整数值，如: 10, 50, 100"
         )
 
 
@@ -123,7 +123,7 @@ def _parse_string_to_float(value: str, param_name: str = "参数") -> float:
     except ValueError:
         raise InvalidParameterError(
             f"{param_name} 必须是数字，无法解析: {value}",
-            suggestion=f"请提供有效的数字值，如: 0.6, 3.0"
+            suggestion="请提供有效的数字值，如: 0.6, 3.0"
         )
 
 
@@ -285,7 +285,7 @@ def validate_limit(limit: Optional[Union[int, str]], default: int = 20, max_limi
     if limit > max_limit:
         raise InvalidParameterError(
             f"limit 不能超过 {max_limit}",
-            suggestion=f"请使用分页或降低limit值"
+            suggestion="请使用分页或降低limit值"
         )
 
     return limit

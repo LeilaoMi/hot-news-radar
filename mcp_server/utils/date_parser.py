@@ -6,7 +6,7 @@
 
 import re
 from datetime import datetime, timedelta
-from typing import Tuple, Dict, Optional
+from typing import Tuple, Dict
 
 from .errors import InvalidParameterError
 

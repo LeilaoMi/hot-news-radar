@@ -16,8 +16,6 @@ from trendradar.utils.time import (
     format_time_filename,
     get_current_time_display,
     convert_time_for_display,
-    format_iso_time_friendly,
-    is_within_days,
 )
 from trendradar.core import (
     load_frequency_words,

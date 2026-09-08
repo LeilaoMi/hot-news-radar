@@ -313,7 +313,7 @@ class RemoteStorageBackend(SQLiteStorageMixin, StorageBackend):
                 print(f"[远程存储] 上传验证成功: {r2_key}")
                 return True
             else:
-                print(f"[远程存储] 上传验证失败: 文件未在远程存储中找到")
+                print("[远程存储] 上传验证失败: 文件未在远程存储中找到")
                 return False
 
         except Exception as e:
@@ -393,10 +393,10 @@ class RemoteStorageBackend(SQLiteStorageMixin, StorageBackend):
 
         # 上传到远程存储
         if self._upload_sqlite(data.date):
-            print(f"[远程存储] 数据已同步到远程存储")
+            print("[远程存储] 数据已同步到远程存储")
             return True
         else:
-            print(f"[远程存储] 上传远程存储失败")
+            print("[远程存储] 上传远程存储失败")
             return False
 
     def get_today_all_data(self, date: Optional[str] = None) -> Optional[NewsData]:
@@ -433,10 +433,10 @@ class RemoteStorageBackend(SQLiteStorageMixin, StorageBackend):
 
             # 上传到远程存储确保记录持久化
             if self._upload_sqlite(date_str):
-                print(f"[远程存储] 时间段执行记录已同步到远程存储")
+                print("[远程存储] 时间段执行记录已同步到远程存储")
                 return True
             else:
-                print(f"[远程存储] 时间段执行记录同步到远程存储失败")
+                print("[远程存储] 时间段执行记录同步到远程存储失败")
                 return False
 
         return False
@@ -464,10 +464,10 @@ class RemoteStorageBackend(SQLiteStorageMixin, StorageBackend):
 
         # 上传到远程存储
         if self._upload_sqlite(data.date, db_type="rss"):
-            print(f"[远程存储] RSS 数据已同步到远程存储")
+            print("[远程存储] RSS 数据已同步到远程存储")
             return True
         else:
-            print(f"[远程存储] RSS 上传远程存储失败")
+            print("[远程存储] RSS 上传远程存储失败")
             return False
 
     def get_rss_data(self, date: Optional[str] = None) -> Optional[RSSData]:

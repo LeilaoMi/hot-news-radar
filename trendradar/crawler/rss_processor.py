@@ -145,12 +145,12 @@ class RSSProcessor:
 
             # 保存到存储后端
             if self.storage_manager.save_rss_data(rss_data):
-                log.info(f"[RSS] 数据已保存到存储后端")
+                log.info("[RSS] 数据已保存到存储后端")
 
                 # 处理 RSS 数据（按模式过滤）并返回用于合并推送
                 return self.process_by_mode(rss_data, report_mode, rank_threshold, frequency_file)
             else:
-                log.info(f"[RSS] 数据保存失败")
+                log.info("[RSS] 数据保存失败")
                 return None, None, None, set()
 
         except ImportError as e:

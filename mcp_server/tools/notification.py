@@ -26,7 +26,6 @@ import yaml
 from trendradar.core.loader import _load_webhook_config, _load_notification_config
 from trendradar.notification.batch import (
     truncate_to_bytes,
-    get_batch_header,
     get_max_batch_header_size,
     add_batch_headers,
 )

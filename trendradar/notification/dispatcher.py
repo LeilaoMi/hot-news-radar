@@ -22,10 +22,6 @@ from trendradar.core.config import (
     validate_paired_configs,
 )
 
-from trendradar.core.logger import get_logger
-
-log = get_logger(__name__)
-
 from .senders import (
     send_to_bark,
     send_to_dingtalk,
@@ -37,6 +33,10 @@ from .senders import (
     send_to_wework,
     send_to_generic_webhook,
 )
+
+from trendradar.core.logger import get_logger
+
+log = get_logger(__name__)
 
 
 # 类型检查时导入，运行时不导入（避免循环导入）

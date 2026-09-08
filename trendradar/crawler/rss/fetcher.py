@@ -14,7 +14,7 @@ import requests
 
 from .parser import RSSParser
 from trendradar.storage.base import RSSItem, RSSData
-from trendradar.utils.time import get_configured_time, is_within_days, DEFAULT_TIMEZONE
+from trendradar.utils.time import get_configured_time, DEFAULT_TIMEZONE
 
 
 @dataclass

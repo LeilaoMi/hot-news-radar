@@ -173,9 +173,6 @@ def render_dingtalk_content(
     if region_order is None:
         region_order = DEFAULT_REGION_ORDER
 
-    total_titles = sum(
-        len(stat["titles"]) for stat in report_data["stats"] if stat["count"] > 0
-    )
     now = get_time_func() if get_time_func else datetime.now()
 
     # 头部信息由 splitter 统一构建，此处不再重复

@@ -24,8 +24,8 @@ from trendradar.report.data_preparer import (
     prepare_standalone_data,
 )
 from trendradar.storage import convert_crawl_results_to_news_data
-from trendradar.utils.time import DEFAULT_TIMEZONE, is_within_days, calculate_days_old
-from trendradar.ai import AIAnalyzer, AIAnalysisResult
+from trendradar.utils.time import DEFAULT_TIMEZONE
+from trendradar.ai import AIAnalysisResult
 from trendradar.ai.analysis_service import AIAnalysisService
 from trendradar.core.scheduler import ResolvedSchedule
 from trendradar.commands import check_all_versions, run_doctor, run_test_notification, handle_status_commands

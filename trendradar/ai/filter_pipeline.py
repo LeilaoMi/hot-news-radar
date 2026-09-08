@@ -84,7 +84,7 @@ class AIFilterPipeline:
         effective_interests_file = configured_interests or "ai_interests.txt"
 
         if self._debug:
-            log.info(f"[AI筛选][DEBUG] === 配置信息 ===")
+            log.info("[AI筛选][DEBUG] === 配置信息 ===")
             log.info(f"[AI筛选][DEBUG] 存储后端: {self.storage.backend_name}")
             log.info(f"[AI筛选][DEBUG] batch_size={filter_config.get('BATCH_SIZE', 200)}, "
                   f"batch_interval={filter_config.get('BATCH_INTERVAL', 5)}")
@@ -162,7 +162,7 @@ class AIFilterPipeline:
         all_results = self.storage.get_active_ai_filter_results(interests_file=effective_interests_file)
 
         if self._debug:
-            log.info(f"[AI筛选][DEBUG] === 最终汇总 ===")
+            log.info("[AI筛选][DEBUG] === 最终汇总 ===")
             log.info(f"[AI筛选][DEBUG] 数据库 active 分类结果: {len(all_results)} 条")
             tag_counts: dict = {}
             for r in all_results:
@@ -202,7 +202,7 @@ class AIFilterPipeline:
         update_result = ai_filter.update_tags(old_tags, interests_content)
 
         if update_result is None:
-            log.info(f"[AI筛选] AI 标签更新失败，回退到重新提取")
+            log.info("[AI筛选] AI 标签更新失败，回退到重新提取")
             tags_data = ai_filter.extract_tags(interests_content)
             if not tags_data:
                 self.storage.end_batch()
@@ -620,8 +620,11 @@ class AIFilterPipeline:
                 parts.append(f"RSS {rss_kept} 条")
             log.info(f"[AI筛选] 分数过滤：min_score={min_score}，保留 {total_kept} 条 score≥{min_score} ({', '.join(parts)})")
 
-        sort_key_priority = lambda x: (x.get("position", 9999), -x["count"], x["word"])
-        sort_key_count = lambda x: (-x["count"], x.get("position", 9999), x["word"])
+        def sort_key_priority(x):
+            return (x.get("position", 9999), -x["count"], x["word"])
+
+        def sort_key_count(x):
+            return (-x["count"], x.get("position", 9999), x["word"])
         sort_key = sort_key_priority if self._priority_sort_enabled else sort_key_count
         hotlist_stats.sort(key=sort_key)
         rss_stats.sort(key=sort_key)

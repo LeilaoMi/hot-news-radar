@@ -116,7 +116,7 @@ class StorageManager:
         # 调试日志
         has_config = bool(bucket_name and access_key and secret_key and endpoint)
         if not has_config:
-            print(f"[存储管理器] 远程存储配置检查失败:")
+            print("[存储管理器] 远程存储配置检查失败:")
             print(f"  - bucket_name: {'已配置' if bucket_name else '未配置'}")
             print(f"  - access_key_id: {'已配置' if access_key else '未配置'}")
             print(f"  - secret_access_key: {'已配置' if secret_key else '未配置'}")
@@ -155,7 +155,7 @@ class StorageManager:
             if resolved_type == "remote":
                 self._backend = self._create_remote_backend()
                 if self._backend:
-                    print(f"[存储管理器] 使用远程存储后端")
+                    print("[存储管理器] 使用远程存储后端")
                 else:
                     print("[存储管理器] 回退到本地存储")
                     resolved_type = "local"

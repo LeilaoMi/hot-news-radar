@@ -138,13 +138,19 @@ def count_word_frequency(
             "HOTNESS_WEIGHT": 0.1,
         }
 
+    def _default_convert_time(x):
+        return x
+
+    def _default_is_first_crawl():
+        return True
+
     # 默认时间转换函数
     if convert_time_func is None:
-        convert_time_func = lambda x: x
+        convert_time_func = _default_convert_time
 
     # 默认首次爬取检测函数
     if is_first_crawl_func is None:
-        is_first_crawl_func = lambda: True
+        is_first_crawl_func = _default_is_first_crawl
 
     # 如果没有配置词组，创建一个包含所有新闻的虚拟词组
     if not word_groups:

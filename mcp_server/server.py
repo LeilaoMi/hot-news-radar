@@ -1143,7 +1143,7 @@ def run_server(
         print("  协议: MCP over stdio (标准输入输出)")
         print("  说明: 通过标准输入输出与 MCP 客户端通信")
     elif transport == 'http':
-        print(f"  协议: MCP over HTTP (生产环境)")
+        print("  协议: MCP over HTTP (生产环境)")
         print(f"  服务器监听: {host}:{port}")
 
     if project_root:

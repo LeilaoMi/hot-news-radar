@@ -2104,7 +2104,7 @@ def render_html_content(
                             time_display = dt_obj.strftime("%m-%d %H:%M")
                         else:
                             time_display = published_at
-                    except:
+                    except Exception:
                         time_display = published_at
 
                     standalone_html += f'<span class="time-info">{html_escape(time_display)}</span>'

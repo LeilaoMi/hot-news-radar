@@ -120,7 +120,7 @@ def limit_accounts(
     """
     if len(accounts) > max_count:
         print(f"⚠️ {channel_name} 配置了 {len(accounts)} 个账号，超过最大限制 {max_count}，只使用前 {max_count} 个")
-        print(f"   ⚠️ 警告：如果你是 fork 用户，过多账号可能导致 GitHub Actions 运行时间过长，存在账号风险")
+        print("   ⚠️ 警告：如果你是 fork 用户，过多账号可能导致 GitHub Actions 运行时间过长，存在账号风险")
         return accounts[:max_count]
     return accounts
 

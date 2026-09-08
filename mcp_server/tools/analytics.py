@@ -884,7 +884,7 @@ class AnalyticsTools:
         prompt_parts.append("")
 
         # 2. 数据概览
-        prompt_parts.append(f"数据概览：")
+        prompt_parts.append("数据概览：")
         prompt_parts.append(f"- 总新闻数：{len(news_data)}")
         prompt_parts.append(f"- 覆盖平台：{len(platform_news)}")
 
