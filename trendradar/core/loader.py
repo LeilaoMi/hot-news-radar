@@ -265,6 +265,9 @@ def _load_ai_config(config_data: Dict) -> Dict:
         "API_KEY": _get_env_str("AI_API_KEY") or ai_config.get("api_key", ""),
         "API_BASE": _get_env_str("AI_API_BASE") or ai_config.get("api_base", ""),
 
+        # 分析任务独立模型（yaml ai.analysis_model / env AI_ANALYSIS_MODEL），空则沿用 MODEL
+        "ANALYSIS_MODEL": _get_env_str("AI_ANALYSIS_MODEL") or ai_config.get("analysis_model", ""),
+
         # 生成参数
         "TIMEOUT": timeout_env if timeout_env is not None else ai_config.get("timeout", 120),
         "TEMPERATURE": ai_config.get("temperature", 1.0),

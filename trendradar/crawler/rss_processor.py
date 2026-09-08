@@ -18,6 +18,10 @@
 """
 from typing import Dict, List, Optional, Tuple
 
+from trendradar.core.logger import get_logger
+
+log = get_logger(__name__)
+
 
 class RSSProcessor:
     """RSS 数据的抓取与加工。"""
@@ -70,7 +74,7 @@ class RSSProcessor:
 
         rss_feeds = self.ctx.rss_feeds
         if not rss_feeds:
-            print("[RSS] 未配置任何 RSS 源")
+            log.info("[RSS] 未配置任何 RSS 源")
             return None, None, None, set()
 
         try:
@@ -87,11 +91,11 @@ class RSSProcessor:
                         max_age_days = int(max_age_days_raw)
                         if max_age_days < 0:
                             feed_id = feed_config.get("id", "unknown")
-                            print(f"[警告] RSS feed '{feed_id}' 的 max_age_days 为负数，将使用全局默认值")
+                            log.info(f"[警告] RSS feed '{feed_id}' 的 max_age_days 为负数，将使用全局默认值")
                             max_age_days = None
                     except (ValueError, TypeError):
                         feed_id = feed_config.get("id", "unknown")
-                        print(f"[警告] RSS feed '{feed_id}' 的 max_age_days 格式错误：{max_age_days_raw}")
+                        log.info(f"[警告] RSS feed '{feed_id}' 的 max_age_days 格式错误：{max_age_days_raw}")
                         max_age_days = None
 
                 feed = RSSFeedConfig(
@@ -106,7 +110,7 @@ class RSSProcessor:
                     feeds.append(feed)
 
             if not feeds:
-                print("[RSS] 没有启用的 RSS 源")
+                log.info("[RSS] 没有启用的 RSS 源")
                 return None, None, None, set()
 
             # 创建抓取器
@@ -141,20 +145,20 @@ class RSSProcessor:
 
             # 保存到存储后端
             if self.storage_manager.save_rss_data(rss_data):
-                print(f"[RSS] 数据已保存到存储后端")
+                log.info(f"[RSS] 数据已保存到存储后端")
 
                 # 处理 RSS 数据（按模式过滤）并返回用于合并推送
                 return self.process_by_mode(rss_data, report_mode, rank_threshold, frequency_file)
             else:
-                print(f"[RSS] 数据保存失败")
+                log.info(f"[RSS] 数据保存失败")
                 return None, None, None, set()
 
         except ImportError as e:
-            print(f"[RSS] 缺少依赖: {e}")
-            print("[RSS] 请安装 feedparser: pip install feedparser")
+            log.info(f"[RSS] 缺少依赖: {e}")
+            log.info("[RSS] 请安装 feedparser: pip install feedparser")
             return None, None, None, set()
         except Exception as e:
-            print(f"[RSS] 抓取失败: {e}")
+            log.info(f"[RSS] 抓取失败: {e}")
             return None, None, None, set()
 
     # ------------------------------------------------------------------
@@ -224,7 +228,7 @@ class RSSProcessor:
         if new_items_dict:
             new_items_list = self.convert_items_to_list(new_items_dict, rss_data.id_to_name)
             if new_items_list:
-                print(f"[RSS] 检测到 {len(new_items_list)} 条新增")
+                log.info(f"[RSS] 检测到 {len(new_items_list)} 条新增")
                 # 收集原始新增 URLs（未经关键词过滤，用于 AI 模式 is_new 检测）
                 rss_new_urls = {item["url"] for item in new_items_list if item.get("url")}
 
@@ -232,7 +236,7 @@ class RSSProcessor:
         if report_mode == "incremental":
             # 增量模式：统计条目就是新增条目
             if not new_items_list:
-                print("[RSS] 增量模式：没有新增 RSS 条目")
+                log.info("[RSS] 增量模式：没有新增 RSS 条目")
                 return None, None, raw_rss_items, rss_new_urls
 
             rss_stats, total = count_rss_frequency(
@@ -248,7 +252,7 @@ class RSSProcessor:
                 quiet=False,
             )
             if not rss_stats:
-                print("[RSS] 增量模式：关键词匹配后没有内容")
+                log.info("[RSS] 增量模式：关键词匹配后没有内容")
                 # 即使关键词匹配为空，也返回原始条目用于独立展示区
                 return None, None, raw_rss_items, rss_new_urls
 
@@ -256,7 +260,7 @@ class RSSProcessor:
             # 当前榜单模式：统计=当前榜单所有条目
             # raw_rss_items 已在前面获取
             if not raw_rss_items:
-                print("[RSS] 当前榜单模式：没有 RSS 数据")
+                log.info("[RSS] 当前榜单模式：没有 RSS 数据")
                 return None, None, None, rss_new_urls
 
             rss_stats, total = count_rss_frequency(
@@ -272,7 +276,7 @@ class RSSProcessor:
                 quiet=False,
             )
             if not rss_stats:
-                print("[RSS] 当前榜单模式：关键词匹配后没有内容")
+                log.info("[RSS] 当前榜单模式：关键词匹配后没有内容")
                 # 即使关键词匹配为空，也返回原始条目用于独立展示区
                 return None, None, raw_rss_items, rss_new_urls
 
@@ -295,7 +299,7 @@ class RSSProcessor:
             # daily 模式：统计=当天所有条目
             # raw_rss_items 已在前面获取
             if not raw_rss_items:
-                print("[RSS] 当日汇总模式：没有 RSS 数据")
+                log.info("[RSS] 当日汇总模式：没有 RSS 数据")
                 return None, None, None, rss_new_urls
 
             rss_stats, total = count_rss_frequency(
@@ -311,7 +315,7 @@ class RSSProcessor:
                 quiet=False,
             )
             if not rss_stats:
-                print("[RSS] 当日汇总模式：关键词匹配后没有内容")
+                log.info("[RSS] 当日汇总模式：关键词匹配后没有内容")
                 # 即使关键词匹配为空，也返回原始条目用于独立展示区
                 return None, None, raw_rss_items, rss_new_urls
 
@@ -398,15 +402,15 @@ class RSSProcessor:
 
         # 输出过滤统计
         if filtered_count > 0:
-            print(f"[RSS] 新鲜度过滤：跳过 {filtered_count} 篇超过指定天数的旧文章（仍保留在数据库中）")
+            log.info(f"[RSS] 新鲜度过滤：跳过 {filtered_count} 篇超过指定天数的旧文章（仍保留在数据库中）")
             # DEBUG 模式下显示详细信息
             if debug_mode and filtered_details:
-                print(f"[RSS] 被过滤的文章详情（共 {len(filtered_details)} 篇）：")
+                log.info(f"[RSS] 被过滤的文章详情（共 {len(filtered_details)} 篇）：")
                 for detail in filtered_details[:10]:  # 最多显示 10 条
                     days_str = f"{detail['days_old']:.1f}" if detail['days_old'] else "未知"
-                    print(f"  - [{days_str}天前] [{detail['feed']}] {detail['title']} (限制: {detail['max_days']}天)")
+                    log.info(f"  - [{days_str}天前] [{detail['feed']}] {detail['title']} (限制: {detail['max_days']}天)")
                 if len(filtered_details) > 10:
-                    print(f"  ... 还有 {len(filtered_details) - 10} 篇被过滤")
+                    log.info(f"  ... 还有 {len(filtered_details) - 10} 篇被过滤")
 
         return rss_items
 
@@ -424,10 +428,10 @@ class RSSProcessor:
 
                 original_count = len(rss_items)
                 rss_items = filtered_items
-                print(f"[RSS] 关键词过滤后剩余 {len(rss_items)}/{original_count} 条")
+                log.info(f"[RSS] 关键词过滤后剩余 {len(rss_items)}/{original_count} 条")
 
                 if not rss_items:
-                    print("[RSS] 关键词过滤后没有匹配内容")
+                    log.info("[RSS] 关键词过滤后没有匹配内容")
                     return []
         except FileNotFoundError:
             # 关键词文件不存在时跳过过滤
@@ -458,9 +462,9 @@ class RSSProcessor:
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(html_content)
 
-            print(f"[RSS] HTML 报告已生成: {file_path}")
+            log.info(f"[RSS] HTML 报告已生成: {file_path}")
             return str(file_path)
 
         except Exception as e:
-            print(f"[RSS] 生成 HTML 报告失败: {e}")
+            log.info(f"[RSS] 生成 HTML 报告失败: {e}")
             return None

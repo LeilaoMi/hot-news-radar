@@ -19,6 +19,10 @@ from typing import Dict, List, Optional, Tuple
 
 from trendradar.report.data_preparer import prepare_current_title_info
 
+from trendradar.core.logger import get_logger, log_exception
+
+log = get_logger(__name__)
+
 
 class AIAnalysisService:
     """AI 分析的编排与执行。"""
@@ -46,19 +50,19 @@ class AIAnalysisService:
             # 获取当前配置的监控平台ID列表
             current_platform_ids = self.ctx.platform_ids
             if not quiet:
-                print(f"当前监控平台: {current_platform_ids}")
+                log.info(f"当前监控平台: {current_platform_ids}")
 
             all_results, id_to_name, title_info = self.ctx.read_today_titles(
                 current_platform_ids, quiet=quiet
             )
 
             if not all_results:
-                print("没有找到当天的数据")
+                log.info("没有找到当天的数据")
                 return None
 
             total_titles = sum(len(titles) for titles in all_results.values())
             if not quiet:
-                print(f"读取到 {total_titles} 个标题（已按当前监控平台过滤）")
+                log.info(f"读取到 {total_titles} 个标题（已按当前监控平台过滤）")
 
             new_titles = self.ctx.detect_new_titles(current_platform_ids, quiet=quiet)
             word_groups, filter_words, global_filters = self.ctx.load_frequency_words(frequency_file)
@@ -73,7 +77,7 @@ class AIAnalysisService:
                 global_filters,
             )
         except Exception as e:
-            print(f"数据加载失败: {e}")
+            log.info(f"数据加载失败: {e}")
             return None
 
     # ------------------------------------------------------------------
@@ -106,7 +110,7 @@ class AIAnalysisService:
             if ai_mode == "incremental":
                 # incremental 模式：使用当前抓取的数据
                 if not current_results or not current_id_to_name:
-                    print("[AI] incremental 模式需要当前抓取数据，但未提供")
+                    log.info("[AI] incremental 模式需要当前抓取数据，但未提供")
                     return [], None
 
                 # 准备当前时间信息
@@ -143,7 +147,7 @@ class AIAnalysisService:
                 # 加载历史数据
                 analysis_data = self.load_analysis_data(frequency_file, quiet=True)
                 if not analysis_data:
-                    print(f"[AI] 无法加载历史数据用于 {ai_mode} 模式分析")
+                    log.info(f"[AI] 无法加载历史数据用于 {ai_mode} 模式分析")
                     return [], None
 
                 (
@@ -179,11 +183,11 @@ class AIAnalysisService:
 
                 return stats, id_to_name
             else:
-                print(f"[AI] 未知的 AI 模式: {ai_mode}")
+                log.info(f"[AI] 未知的 AI 模式: {ai_mode}")
                 return [], None
 
         except Exception as e:
-            print(f"[AI] 准备 {ai_mode} 模式数据时出错: {e}")
+            log.info(f"[AI] 准备 {ai_mode} 模式数据时出错: {e}")
             if self.ctx.config.get("DEBUG", False):
                 import traceback
                 traceback.print_exc()
@@ -214,23 +218,24 @@ class AIAnalysisService:
 
         # 调度系统决策
         if not schedule.analyze:
-            print("[AI] 调度器: 当前时间段不执行 AI 分析")
+            log.info("[AI] 调度器: 当前时间段不执行 AI 分析")
             return None
 
         if schedule.once_analyze and schedule.period_key:
             scheduler = self.ctx.create_scheduler()
             date_str = self.ctx.format_date()
             if scheduler.already_executed(schedule.period_key, "analyze", date_str):
-                print(f"[AI] 调度器: 时间段 {schedule.period_name or schedule.period_key} 今天已分析过，跳过")
+                log.info(f"[AI] 调度器: 时间段 {schedule.period_name or schedule.period_key} 今天已分析过，跳过")
                 return None
             else:
-                print(f"[AI] 调度器: 时间段 {schedule.period_name or schedule.period_key} 今天首次分析")
+                log.info(f"[AI] 调度器: 时间段 {schedule.period_name or schedule.period_key} 今天首次分析")
 
-        print("[AI] 正在进行 AI 分析...")
+        log.info("[AI] 正在进行 AI 分析...")
         try:
             ai_config = self.ctx.config.get("AI", {})
             # 分析任务可配置独立模型（如推理模型 glm-4.7-flash），未配置则沿用全局 ai.model
-            analysis_model = ai_config.get("analysis_model", "")
+            # 注：loader 产出的配置键为大写 ANALYSIS_MODEL（含 env AI_ANALYSIS_MODEL）；小写键兜底兼容手工构造的配置
+            analysis_model = ai_config.get("ANALYSIS_MODEL", "") or ai_config.get("analysis_model", "")
             if analysis_model:
                 ai_config = dict(ai_config)
                 ai_config["MODEL"] = analysis_model
@@ -248,15 +253,15 @@ class AIAnalysisService:
                 # 使用独立配置的模式，需要重新准备数据
                 ai_mode = ai_mode_config
                 if ai_mode != mode:
-                    print(f"[AI] 使用独立分析模式: {ai_mode} (推送模式: {mode})")
-                    print(f"[AI] 正在准备 {ai_mode} 模式的数据...")
+                    log.info(f"[AI] 使用独立分析模式: {ai_mode} (推送模式: {mode})")
+                    log.info(f"[AI] 正在准备 {ai_mode} 模式的数据...")
 
                     # 根据 AI 模式重新准备数据
                     ai_stats, ai_id_to_name = self.prepare_analysis_data(
                         frequency_file, ai_mode, current_results, id_to_name
                     )
                     if not ai_stats:
-                        print(f"[AI] 警告: 无法准备 {ai_mode} 模式的数据，回退到推送模式数据")
+                        log.info(f"[AI] 警告: 无法准备 {ai_mode} 模式的数据，回退到推送模式数据")
                         ai_stats = stats
                         ai_id_to_name = id_to_name
                         ai_mode = mode
@@ -265,7 +270,7 @@ class AIAnalysisService:
                     ai_id_to_name = id_to_name
             else:
                 # 配置错误，回退到跟随模式
-                print(f"[AI] 警告: 无效的 ai_analysis.mode 配置 '{ai_mode_config}'，使用推送模式 '{mode}'")
+                log.info(f"[AI] 警告: 无效的 ai_analysis.mode 配置 '{ai_mode_config}'，使用推送模式 '{mode}'")
                 ai_mode = mode
                 ai_stats = stats
                 ai_id_to_name = id_to_name
@@ -293,7 +298,7 @@ class AIAnalysisService:
             ai_rss_stats = rss_items if ai_mode == mode else None
             ai_standalone = standalone_data if ai_mode == mode else None
             if ai_mode != mode and (rss_items or standalone_data):
-                print(f"[AI] 独立分析模式（{ai_mode}）：RSS/独立展示区与推送模式（{mode}）不同源，本次分析仅聚焦热榜")
+                log.info(f"[AI] 独立分析模式（{ai_mode}）：RSS/独立展示区与推送模式（{mode}）不同源，本次分析仅聚焦热榜")
 
             result = analyzer.analyze(
                 stats=ai_stats,
@@ -310,9 +315,9 @@ class AIAnalysisService:
                 result.ai_mode = ai_mode
                 if result.error:
                     # 成功但有警告（如 JSON 解析问题但使用了原始文本）
-                    print(f"[AI] 分析完成（有警告: {result.error}）")
+                    log.info(f"[AI] 分析完成（有警告: {result.error}）")
                 else:
-                    print("[AI] 分析完成")
+                    log.info("[AI] 分析完成")
 
                 # 记录 AI 分析
                 if schedule.once_analyze and schedule.period_key:
@@ -320,21 +325,16 @@ class AIAnalysisService:
                     date_str = self.ctx.format_date()
                     scheduler.record_execution(schedule.period_key, "analyze", date_str)
             elif result.skipped:
-                print(f"[AI] {result.error}")
+                log.info(f"[AI] {result.error}")
             else:
-                print(f"[AI] 分析失败: {result.error}")
+                log.info(f"[AI] 分析失败: {result.error}")
 
             return result
         except Exception as e:
-            import sys
-            import traceback
-            error_type = type(e).__name__
+            # 截断过长的错误消息，避免极端异常刷屏
             error_msg = str(e)
-            # 截断过长的错误消息
             if len(error_msg) > 200:
                 error_msg = error_msg[:200] + "..."
-            print(f"[AI] 分析出错 ({error_type}): {error_msg}")
-            # 详细错误日志到 stderr
-            print(f"[AI] 详细错误堆栈:", file=sys.stderr)
-            traceback.print_exc(file=sys.stderr)
-            return AIAnalysisResult(success=False, error=f"{error_type}: {error_msg}")
+            # log_exception 输出 ERROR 级单行（类型+消息），DEBUG 模式附完整堆栈
+            log_exception(log, "[AI] 分析出错", e)
+            return AIAnalysisResult(success=False, error=f"{type(e).__name__}: {error_msg}")

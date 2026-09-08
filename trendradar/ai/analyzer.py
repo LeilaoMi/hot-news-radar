@@ -13,6 +13,10 @@ from typing import Any, Callable, Dict, List, NamedTuple, Optional
 from trendradar.ai.client import AIClient
 from trendradar.ai.prompt_loader import load_prompt_template
 
+from trendradar.core.logger import get_logger
+
+log = get_logger(__name__)
+
 
 @dataclass
 class AIAnalysisResult:
@@ -85,7 +89,7 @@ class AIAnalyzer:
         # 验证配置
         valid, error = self.client.validate_config()
         if not valid:
-            print(f"[AI] 配置警告: {error}")
+            log.info(f"[AI] 配置警告: {error}")
 
         # 从分析配置获取功能参数
         self.max_news = analysis_config.get("MAX_NEWS_FOR_ANALYSIS", 50)
@@ -132,15 +136,15 @@ class AIAnalyzer:
         masked_key = f"{api_key[:5]}******" if len(api_key) >= 5 else "******"
         model_display = model.replace("/", "/\u200b") if model else "unknown"
 
-        print(f"[AI] 模型: {model_display}")
-        print(f"[AI] Key : {masked_key}")
+        log.info(f"[AI] 模型: {model_display}")
+        log.info(f"[AI] Key : {masked_key}")
 
         if api_base:
-            print(f"[AI] 接口: 存在自定义 API 端点")
+            log.info(f"[AI] 接口: 存在自定义 API 端点")
 
         timeout = self.ai_config.get("TIMEOUT", 120)
         max_tokens = self.ai_config.get("MAX_TOKENS", 5000)
-        print(f"[AI] 参数: timeout={timeout}, max_tokens={max_tokens}")
+        log.info(f"[AI] 参数: timeout={timeout}, max_tokens={max_tokens}")
 
         if not self.client.api_key:
             return AIAnalysisResult(
@@ -192,15 +196,15 @@ class AIAnalyzer:
         user_prompt = user_prompt.replace("{standalone_content}", standalone_content)
 
         if self.debug:
-            print("\n" + "=" * 80)
-            print("[AI 调试] 发送给 AI 的完整提示词")
-            print("=" * 80)
+            log.info("\n" + "=" * 80)
+            log.info("[AI 调试] 发送给 AI 的完整提示词")
+            log.info("=" * 80)
             if self.system_prompt:
-                print("\n--- System Prompt ---")
-                print(self.system_prompt)
-            print("\n--- User Prompt ---")
-            print(user_prompt)
-            print("=" * 80 + "\n")
+                log.info("\n--- System Prompt ---")
+                log.info(self.system_prompt)
+            log.info("\n--- User Prompt ---")
+            log.info(user_prompt)
+            log.info("=" * 80 + "\n")
 
         # 调用 AI API（使用 LiteLLM）
         try:
@@ -209,14 +213,14 @@ class AIAnalyzer:
 
             # JSON 解析失败时的重试兜底（仅重试一次）
             if result.error and "JSON 解析错误" in result.error:
-                print(f"[AI] JSON 解析失败，尝试让 AI 修复...")
+                log.info(f"[AI] JSON 解析失败，尝试让 AI 修复...")
                 retry_result = self._retry_fix_json(response, result.error)
                 if retry_result and retry_result.success and not retry_result.error:
-                    print("[AI] JSON 修复成功")
+                    log.info("[AI] JSON 修复成功")
                     retry_result.raw_response = response
                     result = retry_result
                 else:
-                    print("[AI] JSON 修复失败，使用原始文本兜底")
+                    log.info("[AI] JSON 修复失败，使用原始文本兜底")
 
             # 如果配置未启用 RSS 分析，强制清空 AI 返回的 RSS 洞察
             if not self.include_rss:
@@ -419,7 +423,7 @@ class AIAnalyzer:
             response = self.client.chat(messages)
             return self._parse_response(response)
         except Exception as e:
-            print(f"[AI] 重试修复 JSON 异常: {type(e).__name__}: {e}")
+            log.info(f"[AI] 重试修复 JSON 异常: {type(e).__name__}: {e}")
             return None
 
     def _format_time_range(self, first_time: str, last_time: str) -> str:
@@ -602,7 +606,7 @@ class AIAnalyzer:
                 repaired = repair_json(json_str, return_objects=True)
                 if isinstance(repaired, dict):
                     data = repaired
-                    print("[AI] JSON 本地修复成功（json_repair）")
+                    log.info("[AI] JSON 本地修复成功（json_repair）")
             except Exception:
                 pass
 

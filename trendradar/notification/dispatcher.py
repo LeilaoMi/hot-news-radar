@@ -22,6 +22,10 @@ from trendradar.core.config import (
     validate_paired_configs,
 )
 
+from trendradar.core.logger import get_logger
+
+log = get_logger(__name__)
+
 from .senders import (
     send_to_bark,
     send_to_dingtalk,
@@ -99,7 +103,7 @@ class NotificationDispatcher:
             return report_data, rss_items, rss_new_items, standalone_data
 
         import copy
-        print(f"[翻译] 开始翻译内容到 {self.translator.target_language}...")
+        log.info(f"[翻译] 开始翻译内容到 {self.translator.target_language}...")
 
         scope = self.translator.scope
         display_regions = display_regions or {}
@@ -156,7 +160,7 @@ class NotificationDispatcher:
                     title_locations.append(("standalone_rss", feed_idx, item_idx))
 
         if not titles_to_translate:
-            print("[翻译] 没有需要翻译的内容")
+            log.info("[翻译] 没有需要翻译的内容")
             return report_data, rss_items, rss_new_items, standalone_data
 
         total_count = len(titles_to_translate)
@@ -166,9 +170,9 @@ class NotificationDispatcher:
         num_batches = (total_count + batch_size - 1) // batch_size
 
         if num_batches > 1:
-            print(f"[翻译] 共 {total_count} 条标题待翻译，分 {num_batches} 批（每批 {batch_size} 条，间隔 {batch_interval}s）")
+            log.info(f"[翻译] 共 {total_count} 条标题待翻译，分 {num_batches} 批（每批 {batch_size} 条，间隔 {batch_interval}s）")
         else:
-            print(f"[翻译] 共 {total_count} 条标题待翻译")
+            log.info(f"[翻译] 共 {total_count} 条标题待翻译")
 
         # 分批翻译
         from trendradar.ai.translator import BatchTranslationResult
@@ -182,7 +186,7 @@ class NotificationDispatcher:
             batch_texts = titles_to_translate[i:i + batch_size]
             batch_num = batch_count + 1
             if num_batches > 1:
-                print(f"[翻译] 第 {batch_num}/{num_batches} 批（{len(batch_texts)} 条）...")
+                log.info(f"[翻译] 第 {batch_num}/{num_batches} 批（{len(batch_texts)} 条）...")
             result = self.translator.translate_batch(batch_texts)
             merged_result.results.extend(result.results)
             merged_result.success_count += result.success_count
@@ -192,37 +196,37 @@ class NotificationDispatcher:
             if self.config.get("DEBUG", False):
                 batch_label = f"[翻译][DEBUG][批次 {batch_num}]" if num_batches > 1 else "[翻译][DEBUG]"
                 if result.prompt:
-                    print(f"{batch_label} === 发送给 AI 的 Prompt ===")
-                    print(result.prompt)
-                    print(f"{batch_label} === Prompt 结束 ===")
+                    log.info(f"{batch_label} === 发送给 AI 的 Prompt ===")
+                    log.info(result.prompt)
+                    log.info(f"{batch_label} === Prompt 结束 ===")
                 if result.raw_response:
-                    print(f"{batch_label} === AI 原始响应 ===")
-                    print(result.raw_response)
-                    print(f"{batch_label} === 响应结束 ===")
+                    log.info(f"{batch_label} === AI 原始响应 ===")
+                    log.info(result.raw_response)
+                    log.info(f"{batch_label} === 响应结束 ===")
                 expected = len(batch_texts)
                 if result.parsed_count != expected:
-                    print(f"{batch_label} ⚠️ 行数不匹配：期望 {expected} 条，AI 返回 {result.parsed_count} 条")
+                    log.info(f"{batch_label} ⚠️ 行数不匹配：期望 {expected} 条，AI 返回 {result.parsed_count} 条")
                 unchanged_count = 0
                 for j, res in enumerate(result.results):
                     global_idx = i + j + 1
                     if not res.success and res.error:
-                        print(f"{batch_label} [{global_idx}] !! 失败: {res.error}")
+                        log.info(f"{batch_label} [{global_idx}] !! 失败: {res.error}")
                     elif res.original_text == res.translated_text:
                         unchanged_count += 1
                     else:
-                        print(f"{batch_label} [{global_idx}] {res.original_text} => {res.translated_text}")
+                        log.info(f"{batch_label} [{global_idx}] {res.original_text} => {res.translated_text}")
                 if unchanged_count > 0:
-                    print(f"{batch_label} （另有 {unchanged_count} 条未变化，已省略）")
+                    log.info(f"{batch_label} （另有 {unchanged_count} 条未变化，已省略）")
 
             batch_count += 1
 
         result = merged_result
 
         if result.success_count == 0:
-            print(f"[翻译] 翻译失败: {result.results[0].error if result.results else '未知错误'}")
+            log.info(f"[翻译] 翻译失败: {result.results[0].error if result.results else '未知错误'}")
             return report_data, rss_items, rss_new_items, standalone_data
 
-        print(f"[翻译] 翻译完成: {result.success_count}/{result.total_count} 成功")
+        log.info(f"[翻译] 翻译完成: {result.success_count}/{result.total_count} 成功")
 
         # 回填翻译结果（仅在翻译文本非空时替换，防止空翻译覆盖原始标题）
         for i, (loc_type, idx1, idx2) in enumerate(title_locations):
@@ -631,7 +635,7 @@ class NotificationDispatcher:
             return False
 
         if ntfy_tokens and len(ntfy_tokens) != len(ntfy_topics):
-            print(
+            log.info(
                 f"❌ ntfy 配置错误：topic 数量({len(ntfy_topics)})与 token 数量({len(ntfy_tokens)})不一致，跳过 ntfy 推送"
             )
             return False

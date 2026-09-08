@@ -16,6 +16,10 @@ from trendradar.utils.time import (
     is_within_days,
 )
 
+from trendradar.core.logger import get_logger
+
+log = get_logger(__name__)
+
 
 class AIFilterPipeline:
     """AI 筛选流水线，编排标签提取、批量分类、结果存储的完整流程"""
@@ -80,13 +84,13 @@ class AIFilterPipeline:
         effective_interests_file = configured_interests or "ai_interests.txt"
 
         if self._debug:
-            print(f"[AI筛选][DEBUG] === 配置信息 ===")
-            print(f"[AI筛选][DEBUG] 存储后端: {self.storage.backend_name}")
-            print(f"[AI筛选][DEBUG] batch_size={filter_config.get('BATCH_SIZE', 200)}, "
+            log.info(f"[AI筛选][DEBUG] === 配置信息 ===")
+            log.info(f"[AI筛选][DEBUG] 存储后端: {self.storage.backend_name}")
+            log.info(f"[AI筛选][DEBUG] batch_size={filter_config.get('BATCH_SIZE', 200)}, "
                   f"batch_interval={filter_config.get('BATCH_INTERVAL', 5)}")
-            print(f"[AI筛选][DEBUG] interests_file={effective_interests_file}")
-            print(f"[AI筛选][DEBUG] prompt_file={filter_config.get('PROMPT_FILE', 'prompt.txt')}")
-            print(f"[AI筛选][DEBUG] extract_prompt_file={filter_config.get('EXTRACT_PROMPT_FILE', 'extract_prompt.txt')}")
+            log.debug(f"[AI筛选][DEBUG] interests_file={effective_interests_file}")
+            log.debug(f"[AI筛选][DEBUG] prompt_file={filter_config.get('PROMPT_FILE', 'prompt.txt')}")
+            log.debug(f"[AI筛选][DEBUG] extract_prompt_file={filter_config.get('EXTRACT_PROMPT_FILE', 'extract_prompt.txt')}")
 
         # 1. 读取兴趣描述
         interests_content = ai_filter.load_interests_content(configured_interests)
@@ -96,8 +100,8 @@ class AIFilterPipeline:
         current_hash = ai_filter.compute_interests_hash(interests_content, effective_interests_file)
 
         if self._debug:
-            print(f"[AI筛选][DEBUG] 兴趣描述 hash: {current_hash}")
-            print(f"[AI筛选][DEBUG] 兴趣描述内容 ({len(interests_content)} 字符):\n{interests_content}")
+            log.info(f"[AI筛选][DEBUG] 兴趣描述 hash: {current_hash}")
+            log.info(f"[AI筛选][DEBUG] 兴趣描述内容 ({len(interests_content)} 字符):\n{interests_content}")
 
         # 2. 开启批量模式
         self.storage.begin_batch()
@@ -106,8 +110,8 @@ class AIFilterPipeline:
         stored_hash = self.storage.get_latest_prompt_hash(interests_file=effective_interests_file)
 
         if self._debug:
-            print(f"[AI筛选][DEBUG] 数据库存储 hash: {stored_hash}")
-            print(f"[AI筛选][DEBUG] hash 对比: stored={stored_hash} vs current={current_hash} → {'匹配' if stored_hash == current_hash else '不匹配'}")
+            log.info(f"[AI筛选][DEBUG] 数据库存储 hash: {stored_hash}")
+            log.info(f"[AI筛选][DEBUG] hash 对比: stored={stored_hash} vs current={current_hash} → {'匹配' if stored_hash == current_hash else '不匹配'}")
 
         if stored_hash != current_hash:
             self._handle_tag_update(
@@ -118,15 +122,15 @@ class AIFilterPipeline:
         # 获取当前 active 标签
         active_tags = self.storage.get_active_ai_filter_tags(interests_file=effective_interests_file)
         if self._debug:
-            print(f"[AI筛选][DEBUG] 从数据库获取 active 标签: {len(active_tags)} 个")
+            log.info(f"[AI筛选][DEBUG] 从数据库获取 active 标签: {len(active_tags)} 个")
             for t in active_tags:
-                print(f"[AI筛选][DEBUG]   id={t['id']} tag={t['tag']} priority={t.get('priority', 9999)} version={t.get('version')} hash={t.get('prompt_hash', '')[:8]}...")
+                log.info(f"[AI筛选][DEBUG]   id={t['id']} tag={t['tag']} priority={t.get('priority', 9999)} version={t.get('version')} hash={t.get('prompt_hash', '')[:8]}...")
 
         if not active_tags:
             self.storage.end_batch()
             return AIFilterResult(success=False, error="没有可用的标签")
 
-        print(f"[AI筛选] 使用 {len(active_tags)} 个标签")
+        log.info(f"[AI筛选] 使用 {len(active_tags)} 个标签")
 
         # 4. 收集待分类新闻
         pending_news, pending_rss, all_news, analyzed_hotlist, all_rss, analyzed_rss, freshness_filtered_rss = self._collect_pending_news(effective_interests_file)
@@ -138,7 +142,7 @@ class AIFilterPipeline:
 
         total_pending = len(pending_news) + len(pending_rss)
         if total_pending == 0:
-            print("[AI筛选] 没有新增新闻需要分类")
+            log.info("[AI筛选] 没有新增新闻需要分类")
 
         # 5. 批量分类
         total_results, succeeded_news_ids, succeeded_rss_ids = self._classify_batches(
@@ -158,8 +162,8 @@ class AIFilterPipeline:
         all_results = self.storage.get_active_ai_filter_results(interests_file=effective_interests_file)
 
         if self._debug:
-            print(f"[AI筛选][DEBUG] === 最终汇总 ===")
-            print(f"[AI筛选][DEBUG] 数据库 active 分类结果: {len(all_results)} 条")
+            log.info(f"[AI筛选][DEBUG] === 最终汇总 ===")
+            log.info(f"[AI筛选][DEBUG] 数据库 active 分类结果: {len(all_results)} 条")
             tag_counts: dict = {}
             for r in all_results:
                 tag_name = r.get("tag", "?")
@@ -167,7 +171,7 @@ class AIFilterPipeline:
                 key = f"{tag_name}({src_type})"
                 tag_counts[key] = tag_counts.get(key, 0) + 1
             for key, count in sorted(tag_counts.items()):
-                print(f"[AI筛选][DEBUG]   {key}: {count} 条")
+                log.info(f"[AI筛选][DEBUG]   {key}: {count} 条")
 
         return self._build_filter_result(all_results, active_tags, total_pending)
 
@@ -184,21 +188,21 @@ class AIFilterPipeline:
         threshold = filter_config.get("RECLASSIFY_THRESHOLD", 0.6)
 
         if stored_hash is None:
-            print(f"[AI筛选] 首次运行 ({effective_interests_file})，提取标签...")
+            log.info(f"[AI筛选] 首次运行 ({effective_interests_file})，提取标签...")
             tags_data = ai_filter.extract_tags(interests_content)
             if not tags_data:
                 self.storage.end_batch()
                 raise _TagExtractionError()
             tags_data = _with_ordered_priorities(tags_data, start_priority=1)
             saved_count = self.storage.save_ai_filter_tags(tags_data, new_version, current_hash, interests_file=effective_interests_file)
-            print(f"[AI筛选] 已保存 {saved_count} 个标签 (版本 {new_version})")
+            log.info(f"[AI筛选] 已保存 {saved_count} 个标签 (版本 {new_version})")
             return
 
         old_tags = self.storage.get_active_ai_filter_tags(interests_file=effective_interests_file)
         update_result = ai_filter.update_tags(old_tags, interests_content)
 
         if update_result is None:
-            print(f"[AI筛选] AI 标签更新失败，回退到重新提取")
+            log.info(f"[AI筛选] AI 标签更新失败，回退到重新提取")
             tags_data = ai_filter.extract_tags(interests_content)
             if not tags_data:
                 self.storage.end_batch()
@@ -207,7 +211,7 @@ class AIFilterPipeline:
             deprecated_count = self.storage.deprecate_all_ai_filter_tags(interests_file=effective_interests_file)
             self.storage.clear_analyzed_news(interests_file=effective_interests_file)
             saved_count = self.storage.save_ai_filter_tags(tags_data, new_version, current_hash, interests_file=effective_interests_file)
-            print(f"[AI筛选] 废弃 {deprecated_count} 个旧标签, 保存 {saved_count} 个新标签 (版本 {new_version})")
+            log.info(f"[AI筛选] 废弃 {deprecated_count} 个旧标签, 保存 {saved_count} 个新标签 (版本 {new_version})")
             return
 
         change_ratio = update_result["change_ratio"]
@@ -216,10 +220,10 @@ class AIFilterPipeline:
         remove_tags = update_result["remove"]
 
         if self._debug:
-            print(f"[AI筛选][DEBUG] AI 标签更新: keep={len(keep_tags)}, add={len(add_tags)}, remove={len(remove_tags)}, change_ratio={change_ratio:.2f}, threshold={threshold:.2f}")
+            log.info(f"[AI筛选][DEBUG] AI 标签更新: keep={len(keep_tags)}, add={len(add_tags)}, remove={len(remove_tags)}, change_ratio={change_ratio:.2f}, threshold={threshold:.2f}")
 
         if change_ratio >= threshold:
-            print(f"[AI筛选] 兴趣文件变更: {effective_interests_file} (AI change_ratio={change_ratio:.2f} >= threshold={threshold:.2f} → 全量重分类)")
+            log.info(f"[AI筛选] 兴趣文件变更: {effective_interests_file} (AI change_ratio={change_ratio:.2f} >= threshold={threshold:.2f} → 全量重分类)")
             tags_data = ai_filter.extract_tags(interests_content)
             if not tags_data:
                 self.storage.end_batch()
@@ -228,7 +232,7 @@ class AIFilterPipeline:
             deprecated_count = self.storage.deprecate_all_ai_filter_tags(interests_file=effective_interests_file)
             self.storage.clear_analyzed_news(interests_file=effective_interests_file)
             saved_count = self.storage.save_ai_filter_tags(tags_data, new_version, current_hash, interests_file=effective_interests_file)
-            print(f"[AI筛选] 废弃 {deprecated_count} 个旧标签, 保存 {saved_count} 个新标签 (版本 {new_version})")
+            log.info(f"[AI筛选] 废弃 {deprecated_count} 个旧标签, 保存 {saved_count} 个新标签 (版本 {new_version})")
         else:
             self._apply_incremental_update(
                 old_tags, keep_tags, add_tags, remove_tags,
@@ -242,8 +246,8 @@ class AIFilterPipeline:
         change_ratio, threshold, new_version, current_hash,
         effective_interests_file,
     ) -> None:
-        print(f"[AI筛选] 兴趣文件变更: {effective_interests_file} (AI change_ratio={change_ratio:.2f} < threshold={threshold:.2f} → 增量更新)")
-        print(f"[AI筛选]   保留 {len(keep_tags)} 个标签, 新增 {len(add_tags)} 个, 废弃 {len(remove_tags)} 个")
+        log.info(f"[AI筛选] 兴趣文件变更: {effective_interests_file} (AI change_ratio={change_ratio:.2f} < threshold={threshold:.2f} → 增量更新)")
+        log.info(f"[AI筛选]   保留 {len(keep_tags)} 个标签, 新增 {len(add_tags)} 个, 废弃 {len(remove_tags)} 个")
 
         if remove_tags:
             remove_set = set(remove_tags)
@@ -251,7 +255,7 @@ class AIFilterPipeline:
             if removed_ids:
                 self.storage.deprecate_specific_ai_filter_tags(removed_ids)
                 if self._debug:
-                    print(f"[AI筛选][DEBUG] 废弃标签 IDs: {removed_ids}")
+                    log.info(f"[AI筛选][DEBUG] 废弃标签 IDs: {removed_ids}")
 
         keep_with_priority = []
         if keep_tags:
@@ -264,14 +268,14 @@ class AIFilterPipeline:
             add_with_priority = _with_ordered_priorities(add_tags, start_priority=add_start)
             saved_count = self.storage.save_ai_filter_tags(add_with_priority, new_version, current_hash, interests_file=effective_interests_file)
             if self._debug:
-                print(f"[AI筛选][DEBUG] 新增保存 {saved_count} 个标签")
+                log.info(f"[AI筛选][DEBUG] 新增保存 {saved_count} 个标签")
 
         self.storage.update_ai_filter_tags_hash(effective_interests_file, current_hash)
 
         if add_tags:
             cleared = self.storage.clear_unmatched_analyzed_news(interests_file=effective_interests_file)
             if cleared > 0:
-                print(f"[AI筛选]   清除 {cleared} 条不匹配记录，将在新标签下重新分析")
+                log.info(f"[AI筛选]   清除 {cleared} 条不匹配记录，将在新标签下重新分析")
 
     def _collect_pending_news(self, effective_interests_file: str):
         all_news = self.storage.get_all_news_ids()
@@ -306,13 +310,13 @@ class AIFilterPipeline:
         hotlist_total = len(all_news)
         hotlist_skipped = len(analyzed_hotlist)
         hotlist_pending = len(pending_news)
-        print(f"[AI筛选] 热榜: 总计 {hotlist_total} 条, 已分析跳过 {hotlist_skipped} 条, 本次发送AI分析 {hotlist_pending} 条")
+        log.info(f"[AI筛选] 热榜: 总计 {hotlist_total} 条, 已分析跳过 {hotlist_skipped} 条, 本次发送AI分析 {hotlist_pending} 条")
         if self._rss_enabled:
             rss_total = len(all_rss)
             rss_skipped = len(analyzed_rss)
             rss_pending = len(pending_rss)
             freshness_info = f", 新鲜度过滤 {freshness_filtered_rss} 条" if freshness_filtered_rss > 0 else ""
-            print(f"[AI筛选] RSS: 总计 {rss_total} 条{freshness_info}, 已分析跳过 {rss_skipped} 条, 本次发送AI分析 {rss_pending} 条")
+            log.info(f"[AI筛选] RSS: 总计 {rss_total} 条{freshness_info}, 已分析跳过 {rss_skipped} 条, 本次发送AI分析 {rss_pending} 条")
 
     def _classify_batches(self, ai_filter, pending_news, pending_rss, active_tags, interests_content, filter_config):
         batch_size = filter_config.get("BATCH_SIZE", 200)
@@ -324,7 +328,7 @@ class AIFilterPipeline:
         for i in range(0, len(pending_news), batch_size):
             if batch_count > 0 and batch_interval > 0:
                 import time
-                print(f"[AI筛选] 批次间隔等待 {batch_interval} 秒...")
+                log.info(f"[AI筛选] 批次间隔等待 {batch_interval} 秒...")
                 time.sleep(batch_interval)
             batch = pending_news[i:i + batch_size]
             titles_for_ai = [
@@ -334,19 +338,19 @@ class AIFilterPipeline:
             batch_results = ai_filter.classify_batch(titles_for_ai, active_tags, interests_content)
             batch_count += 1
             if batch_results is None:
-                print(f"[AI筛选] 热榜批次 {i // batch_size + 1}: {len(batch)} 条 → 分类失败，将在下次运行重试")
+                log.info(f"[AI筛选] 热榜批次 {i // batch_size + 1}: {len(batch)} 条 → 分类失败，将在下次运行重试")
                 continue
             for r in batch_results:
                 r["source_type"] = "hotlist"
             total_results.extend(batch_results)
             succeeded_news_ids.extend(n["id"] for n in batch)
-            print(f"[AI筛选] 热榜批次 {i // batch_size + 1}: {len(batch)} 条 → {len(batch_results)} 条匹配")
+            log.info(f"[AI筛选] 热榜批次 {i // batch_size + 1}: {len(batch)} 条 → {len(batch_results)} 条匹配")
 
         succeeded_rss_ids = []
         for i in range(0, len(pending_rss), batch_size):
             if batch_count > 0 and batch_interval > 0:
                 import time
-                print(f"[AI筛选] 批次间隔等待 {batch_interval} 秒...")
+                log.info(f"[AI筛选] 批次间隔等待 {batch_interval} 秒...")
                 time.sleep(batch_interval)
             batch = pending_rss[i:i + batch_size]
             titles_for_ai = [
@@ -356,22 +360,22 @@ class AIFilterPipeline:
             batch_results = ai_filter.classify_batch(titles_for_ai, active_tags, interests_content)
             batch_count += 1
             if batch_results is None:
-                print(f"[AI筛选] RSS 批次 {i // batch_size + 1}: {len(batch)} 条 → 分类失败，将在下次运行重试")
+                log.info(f"[AI筛选] RSS 批次 {i // batch_size + 1}: {len(batch)} 条 → 分类失败，将在下次运行重试")
                 continue
             for r in batch_results:
                 r["source_type"] = "rss"
             total_results.extend(batch_results)
             succeeded_rss_ids.extend(n["id"] for n in batch)
-            print(f"[AI筛选] RSS 批次 {i // batch_size + 1}: {len(batch)} 条 → {len(batch_results)} 条匹配")
+            log.info(f"[AI筛选] RSS 批次 {i // batch_size + 1}: {len(batch)} 条 → {len(batch_results)} 条匹配")
 
         return total_results, succeeded_news_ids, succeeded_rss_ids
 
     def _save_results(self, total_results, succeeded_news_ids, succeeded_rss_ids, effective_interests_file, current_hash):
         if total_results:
             saved = self.storage.save_ai_filter_results(total_results)
-            print(f"[AI筛选] 保存 {saved} 条分类结果")
+            log.info(f"[AI筛选] 保存 {saved} 条分类结果")
             if self._debug and saved != len(total_results):
-                print(f"[AI筛选][DEBUG] !! 保存数量不一致: 期望 {len(total_results)}, 实际 {saved}（可能有重复记录被跳过）")
+                log.info(f"[AI筛选][DEBUG] !! 保存数量不一致: 期望 {len(total_results)}, 实际 {saved}（可能有重复记录被跳过）")
 
         matched_hotlist_ids = {r["news_item_id"] for r in total_results if r.get("source_type") == "hotlist"}
         matched_rss_ids = {r["news_item_id"] for r in total_results if r.get("source_type") == "rss"}
@@ -391,7 +395,7 @@ class AIFilterPipeline:
         if succeeded_news_ids or succeeded_rss_ids:
             total_analyzed = len(succeeded_news_ids) + len(succeeded_rss_ids)
             total_matched = len(matched_hotlist_ids) + len(matched_rss_ids)
-            print(f"[AI筛选] 已记录 {total_analyzed} 条新闻分析状态 (匹配 {total_matched}, 不匹配 {total_analyzed - total_matched})")
+            log.info(f"[AI筛选] 已记录 {total_analyzed} 条新闻分析状态 (匹配 {total_matched}, 不匹配 {total_analyzed - total_matched})")
 
     def _build_filter_result(
         self,
@@ -497,7 +501,7 @@ class AIFilterPipeline:
                         if last_time and (latest_time is None or last_time > latest_time):
                             latest_time = last_time
             if latest_time:
-                print(f"[AI筛选] current 模式：最新时间 {latest_time}，过滤已下榜新闻")
+                log.info(f"[AI筛选] current 模式：最新时间 {latest_time}，过滤已下榜新闻")
 
         filtered_count = 0
         for tag_data in ai_filter_result.tags:
@@ -605,7 +609,7 @@ class AIFilterPipeline:
 
         if mode == "current" and filtered_count > 0:
             total_kept = sum(s["count"] for s in hotlist_stats)
-            print(f"[AI筛选] current 模式：过滤 {filtered_count} 条已下榜新闻，保留 {total_kept} 条当前在榜")
+            log.info(f"[AI筛选] current 模式：过滤 {filtered_count} 条已下榜新闻，保留 {total_kept} 条当前在榜")
 
         if min_score > 0:
             hotlist_kept = sum(s["count"] for s in hotlist_stats)
@@ -614,7 +618,7 @@ class AIFilterPipeline:
             parts = [f"热榜 {hotlist_kept} 条"]
             if rss_kept > 0:
                 parts.append(f"RSS {rss_kept} 条")
-            print(f"[AI筛选] 分数过滤：min_score={min_score}，保留 {total_kept} 条 score≥{min_score} ({', '.join(parts)})")
+            log.info(f"[AI筛选] 分数过滤：min_score={min_score}，保留 {total_kept} 条 score≥{min_score} ({', '.join(parts)})")
 
         sort_key_priority = lambda x: (x.get("position", 9999), -x["count"], x["word"])
         sort_key_count = lambda x: (-x["count"], x.get("position", 9999), x["word"])
