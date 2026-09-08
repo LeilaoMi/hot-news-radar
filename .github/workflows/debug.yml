@@ -1,0 +1,22 @@
+name: Debug Secrets (one-off)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check secrets visibility
+        env:
+          K: ${{ secrets.AI_API_KEY }}
+          M: ${{ secrets.AI_MODEL }}
+          B: ${{ secrets.AI_API_BASE }}
+          E: ${{ secrets.AI_ANALYSIS_ENABLED }}
+          N: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          echo "AI_API_KEY          len=${#K} head=${K:0:5} (value auto-masked by GitHub)"
+          echo "AI_MODEL            len=${#M} val=$M"
+          echo "AI_API_BASE         len=${#B} val=$B"
+          echo "AI_ANALYSIS_ENABLED len=${#E} val=$E"
+          echo "NTFY_TOPIC          len=${#N} head=${N:0:5}"
