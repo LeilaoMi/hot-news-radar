@@ -211,7 +211,11 @@ git clone --depth 1 --branch reports \
 | `BARK_URL` / `NTFY_TOPIC` | 可选 | iOS / Android 免 App 推送 |
 | `EMAIL_FROM/PASSWORD/TO/SMTP_SERVER/SMTP_PORT` | 可选 | 邮件推送 |
 | `AI_API_KEY` | 推荐 | 智谱 key（免费），启用 AI 翻译/分析 |
+| `AI_ANALYSIS_MODEL` | 可选 | AI 分析独立模型（如推理模型），不配则沿用 `AI_MODEL`；也可用 yaml `ai.analysis_model` |
 | `CLOUDFLARE_API_TOKEN/_ACCOUNT_ID/_PROJECT_NAME` | 可选 | 加配后自动部署 CF Pages，国内访问加速 |
+
+> 💡 **翻译缓存**：AI 翻译结果默认缓存于 `output/ai_cache.db`，同一标题跨运行、跨批次、daily 补跑均零 token 复用。
+> 设环境变量 `AI_CACHE_ENABLED=false` 关闭；`AI_CACHE_DB` 可自定义缓存路径（Docker 常驻部署请把该文件挂进持久卷）。
 
 3. Actions 页手动触发 **Get Hot News** 一次验证链路
 4. （可选）本地调试：
