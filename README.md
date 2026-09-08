@@ -166,7 +166,7 @@ GitHub Actions (cron :33 每小时)
   |---|---|
   | 90 天内 | 保留全部小时级快照 |
   | 超过 90 天 | 仅保留当日 `daily.html` 聚合页，删除小时级明细 |
-  | 永久保留 | `archive.html` 索引、`feed.xml`、`reports/latest/` |
+  | 永久保留 | `archive.html` 索引、`feed.xml` + `feed.json`（JSON Feed 1.1 机器可读）、`reports/latest/` |
 
   超出保留期后，当日的快照归档页会自动注入来源说明，标明它是
   「当前榜单快照」而非「当日汇总」报告，避免误读。

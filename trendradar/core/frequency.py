@@ -34,7 +34,7 @@ def _parse_word(word: str) -> Dict:
     # 1. 优先处理显示名称 (=>)
     # 先切分出 "配置内容" 和 "显示名称"
     if '=>' in word:
-        parts = re.split(r'\s*=>\s*', word, 1)
+        parts = re.split(r"\s*=>\s*", word, maxsplit=1)
         word_config = parts[0].strip()
         # 只有当 => 右边有内容时才作为 display_name
         if len(parts) > 1 and parts[1].strip():
