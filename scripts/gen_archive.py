@@ -15,6 +15,7 @@ DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # 导航条模板：{p} 为相对前缀，由 _nav_for() 按页面实际层级填充。
 # 说明：站点部署在 GitHub Pages 子路径（/hot-news-radar/），绝对路径 "/" 会指向域名根导致 404，
 # 而快照页分布在 reports/<date>/、reports/latest/、reports/ 等不同层级，必须逐页计算相对前缀。
+# id="rdr-ai-daily" 是导航版本标记：inject_nav 检测到旧版导航缺该标记时会原位替换为当前版。
 NAV_TEMPLATE = (
     '<div id="rdr-nav" style="position:sticky;top:0;z-index:9999;background:#1a2233;'
     'color:#fff;padding:8px 16px;font-size:13px;display:flex;gap:18px;align-items:center;'
@@ -22,6 +23,8 @@ NAV_TEMPLATE = (
     '<a href="{p}" style="color:#79c0ff;text-decoration:none;font-weight:600">&#127919; 新闻中心</a>'
     '<a href="{p}reports/archive.html" style="color:#d2a8ff;text-decoration:none">&#128193; 历史</a>'
     '<a href="{p}reports/latest/daily.html" style="color:#7ee787;text-decoration:none">&#128202; 当日汇总</a>'
+    '<a id="rdr-ai-daily" href="{p}reports/ai-daily/index.html" '
+    'style="color:#ffd700;text-decoration:none">&#129302; AI日报</a>'
     '<a href="{p}editor.html" style="color:#ffa657;text-decoration:none">&#9881; 配置</a>'
     '<span style="margin-left:auto;opacity:.55">Hot News Radar</span>'
     '</div>'
@@ -243,7 +246,8 @@ def build_html(days):
 def inject_nav(html_path):
     """幂等注入站点组件到快照页: 导航条 + 折叠按钮 + 页内搜索
     - 无导航的新页面: 注入全部组件
-    - 已有导航的旧页面: 仅补插缺失组件(升级路径)
+    - 已有导航的旧页面: 缺 AI 日报入口时原位替换为当前版导航（版本升级），
+      其余组件仅补插缺失项(升级路径)
     """
     try:
         s = html_path.read_text(encoding="utf-8")
@@ -251,13 +255,23 @@ def inject_nav(html_path):
         return False
 
     missing = []
+    changed = False
     if "rdr-nav" not in s:
         missing.append(_nav_for(html_path))
+        changed = True
+    elif "rdr-ai-daily" not in s:
+        # 导航版本升级：旧版导航没有 AI 日报入口（lambda 替换避免 re.sub 转义陷阱）
+        s = re.sub(r'<div id="rdr-nav".*?</div>',
+                   lambda _m: _nav_for(html_path), s, count=1, flags=re.S)
+        changed = True
     if "rdr-fold" not in s:
         missing.append(COLLAPSE_JS)
+        changed = True
     if "rdr-search" not in s:
         missing.append(SEARCHBAR_JS)
-    if not missing:
+        changed = True
+
+    if not changed:
         return False
 
     inject = "".join(missing)

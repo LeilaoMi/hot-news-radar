@@ -23,6 +23,7 @@ from trendradar.report.data_preparer import (
     prepare_current_title_info,
     prepare_standalone_data,
 )
+from trendradar.report.ai_daily import write_ai_daily
 from trendradar.storage import convert_crawl_results_to_news_data
 from trendradar.utils.time import DEFAULT_TIMEZONE
 from trendradar.ai import AIAnalysisResult
@@ -408,6 +409,13 @@ class NewsAnalyzer:
                 current_results=data_source, schedule=schedule,
                 standalone_data=standalone_data
             )
+
+        # AI 日报（P2-3）：daily 轮次把 AI 分析结果生成为独立日报页，
+        # 落盘 output/html/ai-daily/ 随项目网页发布；仅生成网页，不推送
+        ai_daily_config = self.ctx.config.get("AI_DAILY", {})
+        if (ai_daily_config.get("ENABLED", True) and mode == "daily"
+                and ai_result is not None and getattr(ai_result, "success", False)):
+            write_ai_daily(ai_result, stats, output_dir="output", now=self.ctx.get_time())
 
         # 翻译 RSS 和独立展示区内容（如果启用）— 在 HTML 生成前执行，确保网页版也能展示翻译内容
         # standalone_data 在此翻译一次后贯穿到推送阶段复用，避免重复翻译并保证网页与推送译文一致

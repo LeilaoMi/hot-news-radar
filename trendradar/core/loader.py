@@ -333,6 +333,17 @@ def _load_ai_dedup_config(config_data: Dict) -> Dict:
     }
 
 
+def _load_ai_daily_config(config_data: Dict) -> Dict:
+    """加载 AI 日报配置（功能配置，模型配置见 _load_ai_config）"""
+    daily_config = config_data.get("ai_daily", {})
+
+    enabled_env = _get_env_bool("AI_DAILY_ENABLED")
+
+    return {
+        "ENABLED": enabled_env if enabled_env is not None else daily_config.get("enabled", True),
+    }
+
+
 def _load_ai_filter_config(config_data: Dict) -> Dict:
     """加载 AI 智能筛选配置（由 filter.method 控制是否启用）"""
     ai_filter = config_data.get("ai_filter", {})
@@ -611,6 +622,9 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
 
     # AI 语义去重配置
     config["AI_DEDUP"] = _load_ai_dedup_config(config_data)
+
+    # AI 日报配置
+    config["AI_DAILY"] = _load_ai_daily_config(config_data)
 
     # 筛选策略配置
     config["FILTER"] = _load_filter_config(config_data)
