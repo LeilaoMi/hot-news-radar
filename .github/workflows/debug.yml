@@ -8,16 +8,15 @@ permissions:
   actions: write
 
 jobs:
-  # A. 基线（已验证能读到的形态）
   a-baseline:
     runs-on: ubuntu-latest
     steps:
       - name: check
         env:
           K: ${{ secrets.AI_API_KEY }}
-        run: echo "A baseline: len=${#K} head=${K:0:5}"
+        run: |
+          echo "A baseline: len=${#K} head=${K:0:5}"
 
-  # B. 复刻 crawler 的 permissions + concurrency + timeout
   b-crawler-perms:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -31,9 +30,9 @@ jobs:
       - name: check
         env:
           K: ${{ secrets.AI_API_KEY }}
-        run: echo "B perms+conc+timeout: len=${#K} head=${K:0:5}"
+        run: |
+          echo "B perms+conc+timeout: len=${#K} head=${K:0:5}"
 
-  # C. 复刻 crawler 的完整 env 块（20+ 个 secrets 引用，含大量不存在的）
   c-big-env:
     runs-on: ubuntu-latest
     steps:
@@ -71,7 +70,6 @@ jobs:
           echo "C big-env: K len=${#AI_API_KEY} head=${AI_API_KEY:0:5}"
           echo "C big-env: MODEL len=${#AI_MODEL} BASE len=${#AI_API_BASE} ENABLED=[$AI_ANALYSIS_ENABLED]"
 
-  # D. 复刻 uv run 链路（验证 uv 是否吞掉环境变量）
   d-uv-run:
     runs-on: ubuntu-latest
     steps:
