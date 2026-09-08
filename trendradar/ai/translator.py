@@ -9,8 +9,12 @@ AI 翻译器模块
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
+from trendradar.ai.cache import AICache
 from trendradar.ai.client import AIClient
 from trendradar.ai.prompt_loader import load_prompt_template
+from trendradar.core.logger import get_logger
+
+log = get_logger(__name__)
 
 
 @dataclass
@@ -56,6 +60,14 @@ class AITranslator:
         # 创建 AI 客户端（基于 LiteLLM）
         self.client = AIClient(ai_config)
 
+        # AI 结果缓存：同一标题跨运行/跨批次/daily 补跑零成本复用。
+        # 开关：ai_translation.CACHE_ENABLED（默认开）+ env AI_CACHE_ENABLED；
+        # 路径：ai.CACHE_DB_PATH → env AI_CACHE_DB → output/ai_cache.db
+        self.cache = AICache(
+            db_path=ai_config.get("CACHE_DB_PATH"),
+            enabled=translation_config.get("CACHE_ENABLED", True),
+        )
+
         # 加载提示词模板
         self.system_prompt, self.user_prompt_template = load_prompt_template(
             translation_config.get("PROMPT_FILE", "ai_translation_prompt.txt"),
@@ -87,6 +99,14 @@ class AITranslator:
             result.success = True
             return result
 
+        # 缓存命中直接返回
+        cache_kind = f"translate:{self.target_language}"
+        cached = self.cache.get(cache_kind, text)
+        if cached is not None:
+            result.translated_text = cached
+            result.success = True
+            return result
+
         try:
             # 构建提示词
             user_prompt = self.user_prompt_template
@@ -97,6 +117,7 @@ class AITranslator:
             response = self._call_ai(user_prompt)
             result.translated_text = response.strip()
             result.success = True
+            self.cache.put(cache_kind, text, result.translated_text)
 
         except Exception as e:
             error_type = type(e).__name__
@@ -162,47 +183,74 @@ class AITranslator:
         if not non_empty_texts:
             return batch_result
 
-        try:
-            # 构建批量翻译内容（使用编号格式）
-            batch_content = self._format_batch_content(non_empty_texts)
-
-            # 构建提示词
-            user_prompt = self.user_prompt_template
-            user_prompt = user_prompt.replace("{target_language}", self.target_language)
-            user_prompt = user_prompt.replace("{content}", batch_content)
-
-            # 记录 debug 信息（包含完整的 system + user prompt）
-            if self.system_prompt:
-                batch_result.prompt = f"[system]\n{self.system_prompt}\n\n[user]\n{user_prompt}"
-            else:
-                batch_result.prompt = user_prompt
-
-            # 调用 AI API
-            response = self._call_ai(user_prompt)
-
-            # 记录 AI 原始响应
-            batch_result.raw_response = response
-
-            # 解析批量翻译结果
-            translated_texts, raw_parsed_count = self._parse_batch_response(response, len(non_empty_texts))
-            batch_result.parsed_count = raw_parsed_count
-
-            # 填充结果（跳过空翻译，避免用空字符串覆盖原始标题）
-            for idx, translated in zip(non_empty_indices, translated_texts):
-                if translated and translated.strip():
-                    batch_result.results[idx].translated_text = translated
-                    batch_result.results[idx].success = True
+        # ── 缓存命中分流：仅将未命中的标题送去 API（kind 含目标语言隔离）──
+        cache_kind = f"translate:{self.target_language}"
+        original_by_index = dict(zip(non_empty_indices, non_empty_texts))
+        to_translate_indices = list(non_empty_indices)
+        to_translate_texts = list(non_empty_texts)
+        if self.cache.enabled:
+            to_translate_indices, to_translate_texts = [], []
+            for i, text in zip(non_empty_indices, non_empty_texts):
+                cached = self.cache.get(cache_kind, text)
+                if cached is not None:
+                    batch_result.results[i].translated_text = cached
+                    batch_result.results[i].success = True
                     batch_result.success_count += 1
                 else:
-                    batch_result.results[idx].translated_text = batch_result.results[idx].original_text
-                    batch_result.results[idx].success = True
-                    batch_result.success_count += 1
+                    to_translate_indices.append(i)
+                    to_translate_texts.append(text)
+            cached_count = len(non_empty_texts) - len(to_translate_texts)
+            if cached_count:
+                log.info(
+                    f"[AI翻译] 缓存命中 {cached_count}/{len(non_empty_texts)} 条，"
+                    f"实际请求 {len(to_translate_texts)} 条"
+                )
 
-        except Exception as e:
-            error_msg = f"批量翻译失败: {type(e).__name__}: {str(e)[:100]}"
-            for idx in non_empty_indices:
-                batch_result.results[idx].error = error_msg
-            batch_result.fail_count = len(non_empty_indices)
+        if to_translate_texts:
+            try:
+                # 构建批量翻译内容（使用编号格式，仅含未命中缓存的条目）
+                batch_content = self._format_batch_content(to_translate_texts)
+
+                # 构建提示词
+                user_prompt = self.user_prompt_template
+                user_prompt = user_prompt.replace("{target_language}", self.target_language)
+                user_prompt = user_prompt.replace("{content}", batch_content)
+
+                # 记录 debug 信息（包含完整的 system + user prompt）
+                if self.system_prompt:
+                    batch_result.prompt = f"[system]\n{self.system_prompt}\n\n[user]\n{user_prompt}"
+                else:
+                    batch_result.prompt = user_prompt
+
+                # 调用 AI API
+                response = self._call_ai(user_prompt)
+
+                # 记录 AI 原始响应
+                batch_result.raw_response = response
+
+                # 解析批量翻译结果
+                translated_texts, raw_parsed_count = self._parse_batch_response(response, len(to_translate_texts))
+                batch_result.parsed_count = raw_parsed_count
+
+                # 填充结果（跳过空翻译，避免用空字符串覆盖原始标题）
+                for idx, translated in zip(to_translate_indices, translated_texts):
+                    if translated and translated.strip():
+                        batch_result.results[idx].translated_text = translated
+                        batch_result.results[idx].success = True
+                        batch_result.success_count += 1
+                        # 成功译文写入缓存，下次零成本复用
+                        self.cache.put(cache_kind, original_by_index[idx], translated)
+                    else:
+                        batch_result.results[idx].translated_text = batch_result.results[idx].original_text
+                        batch_result.results[idx].success = True
+                        batch_result.success_count += 1
+
+            except Exception as e:
+                error_msg = f"批量翻译失败: {type(e).__name__}: {str(e)[:100]}"
+                # 仅未命中缓存的条目标记失败；缓存命中的已是成功态，不受影响
+                for idx in to_translate_indices:
+                    batch_result.results[idx].error = error_msg
+                batch_result.fail_count = len(to_translate_indices)
 
         return batch_result
 
