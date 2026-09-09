@@ -48,7 +48,15 @@ def check(path: str = DEFAULT_PATH) -> int:
     md, hh, mm = m.group(1), m.group(2), m.group(3)
     try:
         month, day = md.split("-")
-        now = datetime.now()
+        # 报告正文的生成时间是站点时区（Asia/Shanghai）的墙钟，而 runner 时钟是 UTC。
+        # 原实现直接 datetime.now() 比较，age 恒为约 -8h，被误判为"时钟异常"，
+        # 导致 CI 每轮都触发 daily 补跑（2026-09-09 复盘发现）。这里显式换算到站点时区。
+        try:
+            from zoneinfo import ZoneInfo
+            now = datetime.now(ZoneInfo(SITE_TZ)).replace(tzinfo=None)
+        except Exception:
+            from datetime import timedelta
+            now = datetime.utcnow() + timedelta(hours=8)
         gen = now.replace(
             month=int(month), day=int(day),
             hour=int(hh), minute=int(mm), second=0, microsecond=0,
