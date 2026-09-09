@@ -1,8 +1,14 @@
 # coding=utf-8
 """AI 日报生成测试"""
 
+from datetime import datetime
+
 from trendradar.ai.analyzer import AIAnalysisResult
 from trendradar.report.ai_daily import render_ai_daily_html, write_ai_daily
+
+# 固定测试时钟：写盘测试必须显式传 now，否则随真实日期漂移
+# （2026-09-09 起曾因未传 now 而日更失败——时间炸弹）。
+FROZEN_NOW = datetime(2026, 9, 8, 15, 30)
 
 
 def _ai_result(**overrides):
@@ -82,7 +88,8 @@ def test_render_empty_content_fallback():
 # --------------------------------------------------------------------------
 
 def test_write_ai_daily_outputs(tmp_path):
-    path = write_ai_daily(_ai_result(), _stats(), output_dir=str(tmp_path))
+    path = write_ai_daily(_ai_result(), _stats(),
+                          output_dir=str(tmp_path), now=FROZEN_NOW)
     assert path is not None
     index = tmp_path / "html" / "ai-daily" / "index.html"
     archive = tmp_path / "html" / "ai-daily" / "2026-09-08.html"
@@ -103,10 +110,11 @@ def test_write_ai_daily_none_result(tmp_path):
 
 
 def test_write_ai_daily_overwrites_same_day(tmp_path):
-    write_ai_daily(_ai_result(), _stats(), output_dir=str(tmp_path))
+    write_ai_daily(_ai_result(), _stats(),
+                   output_dir=str(tmp_path), now=FROZEN_NOW)
     # 同日再次运行：覆盖更新，不报错不堆积
     path = write_ai_daily(_ai_result(signals="更新后的异动"), _stats(),
-                          output_dir=str(tmp_path))
+                          output_dir=str(tmp_path), now=FROZEN_NOW)
     archive = tmp_path / "html" / "ai-daily" / "2026-09-08.html"
     assert "更新后的异动" in archive.read_text(encoding="utf-8")
     assert path is not None

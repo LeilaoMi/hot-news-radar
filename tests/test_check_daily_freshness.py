@@ -54,6 +54,13 @@ def freeze_clock(monkeypatch, when: datetime):
         def now(cls, tz=None):
             return when
 
+        @classmethod
+        def utcnow(cls):
+            # 无 tzdata 的环境（如 Windows 本机）会走 utcnow()+8h 后备分支。
+            # 后备分支的 utcnow 语义是 UTC 瞬间，因此冻结为 when 对应的 UTC 值，
+            # 保证两个分支殊途同归都得到 when 这个站点墙钟。
+            return when - timedelta(hours=8)
+
     monkeypatch.setattr(mod, "datetime", FakeDateTime)
     return when
 
