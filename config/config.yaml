@@ -496,7 +496,7 @@ ai_translation:
 # 判定结果持久缓存（output/ai_cache.db），同一批标题跨运行零成本。
 # ===============================================================
 ai_dedup:
-  enabled: false                    # 是否启用语义去重（true=启用, false=关闭）
+  enabled: true                    # 是否启用语义去重（true=启用, false=关闭）
 
   batch_size: 30                    # 每批发送给 AI 的标题数，超过此数量自动分批
   batch_interval: 2                 # 分批间隔（秒），避免触发 API 限流，0=不等待
