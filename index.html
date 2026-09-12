@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hot News Radar · 新闻中心</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1a2233">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" type="image/png" href="icon-192.png">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;background:#f5f6f8;color:#24292f;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+.portal{max-width:860px;width:100%}
+h1{text-align:center;font-size:26px;margin-bottom:6px}
+.sub{text-align:center;color:#666;font-size:13px;margin-bottom:28px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:16px}
+.card{background:#fff;border-radius:14px;padding:24px 20px;text-decoration:none;color:inherit;box-shadow:0 2px 8px rgba(0,0,0,.07);transition:.18s;border-top:3px solid var(--c,#0969da)}
+.card:hover{transform:translateY(-4px);box-shadow:0 8px 20px rgba(0,0,0,.12)}
+.card .icon{font-size:30px;margin-bottom:10px}
+.card b{display:block;font-size:17px;margin-bottom:6px}
+.card p{font-size:12.5px;color:#666;line-height:1.5}
+.card .meta{margin-top:10px;font-size:11px;color:#0969da;font-weight:600}
+footer{text-align:center;margin-top:32px;font-size:12px;color:#999}
+footer a{color:#0969da;text-decoration:none}
+@media(prefers-color-scheme:dark){body{background:#15161a;color:#ebe8e0}.card{background:#1e1f24}.card p,.sub{color:#9c958b}}
+</style>
+</head>
+<body>
+<div class="portal">
+<h1>📡 Hot News Radar</h1>
+<p class="sub">全量新闻雷达 · 每小时快照 · AI 翻译与分析</p>
+<div class="grid">
+<a class="card" style="--c:#0969da" href="reports/latest/current.html"><div class="icon">🔥</div><b>今日实时热榜</b><p>最近一轮抓取的全平台热点，含国际源中文翻译</p><div class="meta" id="cur-meta">每小时更新 →</div></a>
+<a class="card" style="--c:#d29922" href="reports/latest/daily.html"><div class="icon">📊</div><b>当日汇总报告</b><p>全天累计去重视图，配合 AI 分析洞察当日趋势</p><div class="meta">每日汇总 →</div></a>
+<a class="card" style="--c:#8250df" href="reports/archive.html"><div class="icon">🗂️</div><b>历史归档库</b><p>按日期回看任意一天的全部快照，永久保存</p><div class="meta" id="archive-meta">加载中…</div></a>
+<a class="card" style="--c:#bf3989" href="reports/trends.html"><div class="icon">&#128200;</div><b>趋势洞察</b><p>持续热度榜 + 多平台共振，跨快照分析什么在真正升温</p><div class="meta">每日聚合 &#8594;</div></a>
+<a class="card" style="--c:#1a7f37" href="editor.html"><div class="icon">⚙️</div><b>配置编辑器</b><p>浏览器直接改时间线、关键词、RSS 源与推送渠道</p><div class="meta">在线编辑 →</div></a>
+</div>
+<footer>引擎 <a href="https://github.com/sansan0/TrendRadar" target="_blank">TrendRadar</a> (GPL-3.0) · <a href="https://github.com/LeilaoMi/hot-news-radar">GitHub 仓库</a></footer>
+</div>
+<script>
+fetch('reports/latest/current.html').then(r=>r.text()).then(t=>{
+  const d=new DOMParser().parseFromString(t,'text/html');
+  const n=d.querySelectorAll('.news-item,.new-item,.rss-item').length;
+  if(n) document.getElementById('cur-meta').textContent=`${n} 条 · 每小时更新 →`;
+}).catch(()=>{});
+fetch('reports/archive.html').then(r=>r.text()).then(t=>{
+  const m=t.match(/(\d+)\s*<\/b><span>覆盖天数/); const n=t.match(/(\d+)\s*<\/b><span>快照总数/);
+  if(m) document.getElementById('archive-meta').textContent=`已有 ${m[1]} 天 ${n?n[1]:''} 快照 →`;
+}).catch(()=>{});
+</script>
+<script>
+// 相对路径注册：兼容自定义域名根路径与 github.io 子路径两种访问方式。
+// 注意：仅在生产（https 或 localhost）下注册，且页面卸载前不强制缓存更新，
+// 报告页采用 network-first 策略，在线时始终拿到最新内容。
+if ("serviceWorker" in navigator && location.protocol !== "file:") {
+  navigator.serviceWorker.register("sw.js").catch(function (err) {
+    console.warn("Service Worker 注册失败（不影响正常浏览）:", err);
+  });
+}
+</script>
+</body>
+</html>

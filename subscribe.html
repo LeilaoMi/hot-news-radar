@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>热点雷达 · 关键词订阅生成器</title>
+<!--
+  P2-4 关键词订阅 UI（纯静态，无后端）
+  - 只读预览：左侧勾选/填写，右侧实时生成 frequency_words.txt 片段（只读）
+  - 人工粘贴：一键复制 / 下载 .txt，由用户自行粘贴到自己的 config
+  - 不发任何请求，草稿仅存 localStorage
+-->
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;
+background:#f5f6f8;color:#24292f;line-height:1.6}
+header{background:#1a2233;color:#fff;padding:26px 20px;text-align:center}
+header h1{font-size:21px;margin-bottom:5px}
+header p{opacity:.75;font-size:13px}
+nav{max-width:1080px;margin:12px auto 0;padding:0 16px;font-size:13px}
+nav a{color:#0969da;text-decoration:none;margin-right:14px}
+.wrap{max-width:1080px;margin:0 auto;padding:16px;display:flex;gap:16px;align-items:flex-start}
+@media (max-width:900px){.wrap{flex-direction:column}}
+.panel{background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.left{flex:1.15;min-width:0}
+.right{flex:1;min-width:0;position:sticky;top:12px}
+.panel h2{font-size:15px;padding:13px 18px;background:#fafbfc;border-bottom:1px solid #eee;
+border-radius:12px 12px 0 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;padding:14px 18px}
+.topic{border:2px solid #e4e8ee;border-radius:10px;padding:10px 12px;cursor:pointer;
+transition:all .15s;user-select:none;position:relative}
+.topic:hover{border-color:#9ec1f5;background:#f7faff}
+.topic.on{border-color:#0969da;background:#eef3fd}
+.topic.on::after{content:'✓';position:absolute;top:6px;right:9px;color:#0969da;
+font-weight:700;font-size:13px}
+.topic .name{font-size:13.5px;font-weight:700;margin-bottom:4px}
+.topic .words{font-size:11px;color:#6b7280;line-height:1.5;display:-webkit-box;
+-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.sec{padding:14px 18px;border-top:1px solid #f0f1f3}
+.sec label{display:block;font-size:12.5px;font-weight:700;color:#57606a;margin-bottom:6px}
+.sec input[type=text],.sec textarea{width:100%;padding:9px 12px;font-size:13.5px;
+border:1px solid #d7dde5;border-radius:8px;outline:none;font-family:inherit}
+.sec input:focus,.sec textarea:focus{border-color:#0969da;
+box-shadow:0 0 0 3px rgba(9,105,218,.12)}
+.sec .hint{font-size:11.5px;color:#8b949e;margin-top:5px}
+.sec textarea{resize:vertical;min-height:64px}
+.preview-box{padding:14px 18px}
+#preview{width:100%;height:340px;padding:12px;font-size:12.5px;line-height:1.65;
+font-family:ui-monospace,Consolas,'Courier New',monospace;background:#0d1117;color:#c9d1d9;
+border:1px solid #30363d;border-radius:10px;resize:vertical;white-space:pre;overflow:auto}
+.btns{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;align-items:center}
+button.act{padding:9px 20px;border:none;border-radius:20px;font-size:13.5px;
+cursor:pointer;font-weight:600;transition:all .15s}
+.btn-copy{background:#0969da;color:#fff}
+.btn-copy:hover{background:#0860c4}
+.btn-dl{background:#fff;color:#0969da;border:1px solid #d0d7de}
+.btn-dl:hover{background:#f0f6ff}
+.btn-clr{background:none;color:#8b949e;border:none;font-size:12px;cursor:pointer;
+padding:9px 6px;text-decoration:underline}
+.count{margin-left:auto;font-size:12px;color:#8b949e}
+.howto{font-size:12.5px;color:#57606a;line-height:1.9}
+.howto code{background:#f2f4f7;border:1px solid #e4e8ee;border-radius:4px;
+padding:1px 6px;font-size:11.5px}
+.howto ol{padding-left:18px}
+.foot{text-align:center;padding:22px;font-size:12px;color:#999}
+#toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(20px);
+background:#24292f;color:#fff;padding:10px 22px;border-radius:22px;font-size:13px;
+opacity:0;pointer-events:none;transition:all .25s;z-index:99}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+<header>
+  <h1>&#127919; 关键词订阅生成器</h1>
+  <p>勾选感兴趣的话题，生成配置片段，粘贴到你自己的 config/frequency_words.txt</p>
+</header>
+<nav>
+  <a href="./reports/index.html">&#8592; 最新报告</a>
+  <a href="./reports/archive.html">&#128193; 历史归档</a>
+  <a href="./reports/ai-daily/index.html">&#129302; AI日报</a>
+  <a href="./editor.html">&#9881; 完整配置编辑器</a>
+</nav>
+
+<div class="wrap">
+  <!-- 左：选择区 -->
+  <div class="left">
+    <div class="panel">
+      <h2>&#128218; 第 1 步 · 点选感兴趣的话题</h2>
+      <div class="grid" id="topics"></div>
+    </div>
+
+    <div class="panel" style="margin-top:14px">
+      <h2>&#9997;&#65039; 第 2 步 · 自定义关键词组（可选）</h2>
+      <div class="sec">
+        <label>组名（显示在报告中的分组标题）</label>
+        <input type="text" id="custom-name" placeholder="例如: 我的关注">
+      </div>
+      <div class="sec">
+        <label>关键词（每行一个；行首加 + 为必须词，加 ! 为过滤词，加 @数字 限制该组显示条数）</label>
+        <textarea id="custom-words" placeholder="例如：&#10;新能源汽车&#10;+比亚迪 +发布&#10;!广告&#10;@15"></textarea>
+        <p class="hint">必须词：同组标题需同时包含所有 + 词；过滤词：标题含该词即排除；@数字：该组最多显示条数。</p>
+      </div>
+      <div class="sec">
+        <label>全局排除词（任何标题命中即整条丢弃，可选）</label>
+        <input type="text" id="global-filter" placeholder="例如：广告, 彩票（用逗号分隔）">
+        <p class="hint">建议只写确定性强的词，过严会滤掉大量正常内容。</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 右：只读预览 -->
+  <div class="right">
+    <div class="panel">
+      <h2>&#128196; 第 3 步 · 复制配置片段（只读预览）</h2>
+      <div class="preview-box">
+        <textarea id="preview" readonly></textarea>
+        <div class="btns">
+          <button class="act btn-copy" onclick="copyOut()">&#128203; 复制片段</button>
+          <button class="act btn-dl" onclick="downloadOut()">&#11015;&#65039; 下载 .txt</button>
+          <button class="btn-clr" onclick="resetAll()">清空重来</button>
+          <span class="count" id="stat"></span>
+        </div>
+      </div>
+      <div class="sec howto">
+        <strong>&#128161; 怎么用：</strong>
+        <ol>
+          <li>点击「复制片段」；</li>
+          <li>打开你的部署仓库（或本地项目）中的 <code>config/frequency_words.txt</code>；</li>
+          <li>把片段粘贴到 <code>[WORD_GROUPS]</code> 区域（全局排除词粘贴到 <code>[GLOBAL_FILTER]</code> 区域），保存即可。</li>
+        </ol>
+        <p style="margin-top:6px">说明：词组区保持为空 = 全量模式（显示全部热点）。更多玩法（正则、别名）请用
+          <a href="./editor.html" style="color:#0969da">完整配置编辑器</a>。</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="foot">Powered by TrendRadar · 纯静态页面，草稿仅保存在你的浏览器本地</footer>
+<div id="toast"></div>
+
+<script>
+"use strict";
+
+// ── 预设话题库（每行一词，与解析器一致：一个词组块内每行一个关键词）──
+var TOPICS = [
+  {id:"tech", name:"科技 / AI", words:["AI","人工智能","大模型","芯片","半导体","量子计算","机器人","OpenAI"]},
+  {id:"phone", name:"手机数码", words:["iPhone","华为","小米","折叠屏","新品发布","Mate","苹果"]},
+  {id:"ev", name:"新能源车", words:["新能源","电动车","比亚迪","特斯拉","充电桩","自动驾驶","固态电池"]},
+  {id:"finance", name:"财经投资", words:["股市","A股","基金","黄金","美联储","降息","汇率","IPO"]},
+  {id:"world", name:"国际局势", words:["地缘","制裁","选举","停火","峰会","联合国","外交"]},
+  {id:"sports", name:"体育赛事", words:["世界杯","奥运","NBA","欧冠","国足","夺冠","联赛"]},
+  {id:"game", name:"游戏娱乐", words:["游戏","Steam","新作","发售","票房","演唱会","电视剧"]},
+  {id:"health", name:"健康医疗", words:["疫苗","流感","新药","医院","医保","集采"]},
+  {id:"house", name:"房产楼市", words:["房价","房贷","限购","公积金","楼市","首付"]},
+  {id:"car", name:"汽车出行", words:["新车","召回","油价","高速","自驾","车企"]}
+];
+var LS_KEY = "rdr-subscribe-draft-v1";
+
+var state = {topics:{}, customName:"", customWords:"", globalFilter:""};
+
+// ── 初始化 ──
+function init(){
+  try{
+    var saved = JSON.parse(localStorage.getItem(LS_KEY) || "null");
+    if(saved) state = saved;
+  }catch(e){}
+  var grid = document.getElementById("topics");
+  var html = "";
+  for(var i=0;i<TOPICS.length;i++){
+    var t = TOPICS[i];
+    html += '<div class="topic'+(state.topics[t.id]?' on':'')+'" id="tp-'+t.id+'" onclick="toggleTopic(\''+t.id+'\')">'
+      + '<div class="name">'+t.name+'</div>'
+      + '<div class="words">'+t.words.slice(0,5).join(" · ")+'</div></div>';
+  }
+  grid.innerHTML = html;
+  document.getElementById("custom-name").value = state.customName || "";
+  document.getElementById("custom-words").value = state.customWords || "";
+  document.getElementById("global-filter").value = state.globalFilter || "";
+  ["custom-name","custom-words","global-filter"].forEach(function(id){
+    document.getElementById(id).addEventListener("input", syncFromUI);
+  });
+  render();
+}
+
+function toggleTopic(id){
+  state.topics[id] = !state.topics[id];
+  document.getElementById("tp-"+id).classList.toggle("on", !!state.topics[id]);
+  syncFromUI();
+}
+
+function syncFromUI(){
+  state.customName = document.getElementById("custom-name").value;
+  state.customWords = document.getElementById("custom-words").value;
+  state.globalFilter = document.getElementById("global-filter").value;
+  try{ localStorage.setItem(LS_KEY, JSON.stringify(state)); }catch(e){}
+  render();
+}
+
+// ── 生成片段 ──
+function generate(){
+  var out = [];
+  var groupCount = 0, wordCount = 0;
+
+  // 头注释（解析器忽略 # 行，安全）
+  out.push("# Hot News Radar · 关键词订阅片段");
+  out.push("# 由「关键词订阅生成器」生成 · " + new Date().toISOString().slice(0,10));
+  out.push("# 粘贴方法：词组贴到 [WORD_GROUPS] 区域，全局排除词贴到 [GLOBAL_FILTER] 区域");
+  out.push("# 语法：每行一个词；+必须词  !过滤词  @上限  /正则/ => 别名；词组之间用空行分隔");
+  out.push("");
+
+  // 全局过滤块
+  var gf = (state.globalFilter||"").split(/[,，、\n]/).map(function(s){return s.trim();})
+    .filter(function(s){return s && s.indexOf("#")!==0;});
+  if(gf.length){
+    out.push("[GLOBAL_FILTER]");
+    for(var i=0;i<gf.length;i++){ out.push(gf[i]); wordCount++; }
+    out.push("");
+  }
+
+  // 勾选的话题组
+  for(var t=0;t<TOPICS.length;t++){
+    var topic = TOPICS[t];
+    if(!state.topics[topic.id]) continue;
+    out.push("[" + topic.name.replace(/\s*\/\s*/g, "·").replace(/\s+/g, "") + "]");
+    for(var w=0;w<topic.words.length;w++){ out.push(topic.words[w]); wordCount++; }
+    out.push("");
+    groupCount++;
+  }
+
+  // 自定义组
+  var lines = (state.customWords||"").split("\n").map(function(s){return s.trim();})
+    .filter(function(s){return s && s.indexOf("#")!==0;});
+  if(lines.length){
+    var name = (state.customName||"").trim();
+    if(name) out.push("[" + name + "]");
+    for(var l=0;l<lines.length;l++){ out.push(lines[l]); wordCount++; }
+    out.push("");
+    groupCount++;
+  }
+
+  var body = out.join("\n");
+  if(!groupCount && !gf.length){
+    body += "\n（尚未选择任何内容 —— 勾选左侧话题或填写自定义关键词，这里会实时生成配置片段）\n";
+  }else{
+    body += "# 提示：粘贴后无需其他改动，下一轮抓取即按新关键词过滤。";
+  }
+  document.getElementById("stat").textContent =
+    groupCount ? (groupCount + " 个词组 · " + wordCount + " 个词") : "";
+  return body;
+}
+
+function render(){
+  document.getElementById("preview").value = generate();
+}
+
+// ── 复制 / 下载 / 清空 ──
+function toast(msg){
+  var t = document.getElementById("toast");
+  t.textContent = msg; t.classList.add("show");
+  setTimeout(function(){ t.classList.remove("show"); }, 1800);
+}
+
+function copyOut(){
+  var text = document.getElementById("preview").value;
+  var done = function(){ toast("已复制，去粘贴到 config/frequency_words.txt 吧"); };
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(done, function(){ fallbackCopy(text); done(); });
+  }else{ fallbackCopy(text); done(); }
+}
+
+function fallbackCopy(text){
+  var ta = document.createElement("textarea");
+  ta.value = text; ta.style.position="fixed"; ta.style.opacity="0";
+  document.body.appendChild(ta); ta.select();
+  try{ document.execCommand("copy"); }catch(e){}
+  document.body.removeChild(ta);
+}
+
+function downloadOut(){
+  var blob = new Blob([document.getElementById("preview").value], {type:"text/plain;charset=utf-8"});
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "frequency_words.txt";
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a);
+  setTimeout(function(){ URL.revokeObjectURL(a.href); }, 800);
+  toast("已下载 frequency_words.txt");
+}
+
+function resetAll(){
+  if(!confirm("清空所有勾选与填写内容？")) return;
+  state = {topics:{}, customName:"", customWords:"", globalFilter:""};
+  try{ localStorage.removeItem(LS_KEY); }catch(e){}
+  init();
+  toast("已清空");
+}
+
+init();
+</script>
+</body>
+</html>
