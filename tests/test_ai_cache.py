@@ -138,7 +138,7 @@ def test_batch_all_uncached_then_all_cached(tmp_path):
 def test_batch_partial_hit_renumbers_uncached(tmp_path):
     """部分命中时，API 只收未命中条目，且编号从 1 重排。"""
     t = _FakeTranslator(tmp_path, api_response=_numbered_response(["标题二"]))
-    t.cache.put("translate:English", "标题一", "CACHED-1")
+    t.cache.put(t._get_cache_kind(), "标题一", "CACHED-1")
 
     result = t.translate_batch(["标题一", "标题二"])
     assert result.success_count == 2
@@ -153,7 +153,7 @@ def test_batch_partial_hit_renumbers_uncached(tmp_path):
 def test_batch_api_failure_only_affects_uncached(tmp_path):
     """API 挂掉时，缓存命中条目保持成功，未命中条目标记失败。"""
     t = _FakeTranslator(tmp_path, api_error=RuntimeError("boom"))
-    t.cache.put("translate:English", "标题一", "CACHED-1")
+    t.cache.put(t._get_cache_kind(), "标题一", "CACHED-1")
 
     result = t.translate_batch(["标题一", "标题二"])
     assert result.results[0].success is True
@@ -163,15 +163,16 @@ def test_batch_api_failure_only_affects_uncached(tmp_path):
     assert result.fail_count == 1
 
 
-def test_batch_empty_translation_falls_back(tmp_path):
-    """AI 返回缺号时回退原文，且空译文不写缓存。"""
+def test_batch_missing_number_discards_whole_batch(tmp_path):
+    """AI 返回缺号时整批作废（不按行/按号部分采信），全部保留原文且不写缓存。"""
     t = _FakeTranslator(tmp_path, api_response="[1] T(标题一)\n")  # 缺 [2]
+    t.max_split_depth = 0  # 不拆批重试
 
     result = t.translate_batch(["标题一", "标题二"])
-    assert result.results[0].translated_text == "T(标题一)"
-    assert result.results[1].translated_text == "标题二"  # 回退原文
-    # 空译文未入缓存
-    assert t.cache.get("translate:English", "标题二") is None
+    assert result.success_count == 0
+    assert [r.success for r in result.results] == [False, False]
+    assert t.cache.get(t._get_cache_kind(), "标题一") is None
+    assert t.cache.get(t._get_cache_kind(), "标题二") is None
 
 
 def test_single_translate_cache(tmp_path):

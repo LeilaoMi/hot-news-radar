@@ -232,16 +232,6 @@ class AIAnalysisService:
 
         log.info("[AI] 正在进行 AI 分析...")
         try:
-            ai_config = self.ctx.config.get("AI", {})
-            # 分析任务可配置独立模型（如推理模型 glm-4.7-flash），未配置则沿用全局 ai.model
-            # 注：loader 产出的配置键为大写 ANALYSIS_MODEL（含 env AI_ANALYSIS_MODEL）；小写键兜底兼容手工构造的配置
-            analysis_model = ai_config.get("ANALYSIS_MODEL", "") or ai_config.get("analysis_model", "")
-            if analysis_model:
-                ai_config = dict(ai_config)
-                ai_config["MODEL"] = analysis_model
-            debug_mode = self.ctx.config.get("DEBUG", False)
-            analyzer = AIAnalyzer(ai_config, analysis_config, self.ctx.get_time, debug=debug_mode)
-
             # 确定 AI 分析使用的模式
             ai_mode_config = analysis_config.get("MODE", "follow_report")
             if ai_mode_config == "follow_report":
@@ -274,6 +264,15 @@ class AIAnalysisService:
                 ai_mode = mode
                 ai_stats = stats
                 ai_id_to_name = id_to_name
+
+            # 按功能解析模型（优先级见 trendradar/ai/settings.py）：
+            #   env AI_ANALYSIS_MODEL > env AI_MODEL > yaml ai.analysis_model > yaml ai.model
+            # daily 模式（产出 AI 日报）额外支持 AI_DAILY_MODEL / ai.daily_model，未设置时回退到 analysis
+            from trendradar.ai.settings import feature_ai_config
+            feature = "daily" if ai_mode == "daily" else "analysis"
+            ai_config = feature_ai_config(self.ctx.config.get("AI", {}), feature)
+            debug_mode = self.ctx.config.get("DEBUG", False)
+            analyzer = AIAnalyzer(ai_config, analysis_config, self.ctx.get_time, debug=debug_mode)
 
             # 提取平台列表
             platforms = list(ai_id_to_name.values()) if ai_id_to_name else []

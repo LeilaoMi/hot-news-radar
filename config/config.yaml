@@ -212,6 +212,9 @@ filter:
 ai_filter:
   batch_size: 30                         # 每批发送给 AI 的标题数，超过此数量自动分批
   batch_interval: 1                       # 分批间隔（秒），避免触发 API 限流，0=不等待
+  temperature: 0.1                        # 分类温度（确定性任务，宜低）
+  budget_seconds: 300                     # 筛选环节预算（秒，env AI_FILTER_BUDGET_SECONDS 优先；同时受 ai.total_budget_seconds 约束）
+                                          # 超预算/连续 2 批失败后停止，未分类的新闻留待下次运行（不会被标记为"已分析"）
 
   min_score: 0.7                          # 推送最低分数阈值（0.0~1.0），值越高越严格
                                           # 推荐 0.5~0.7 起步，0=不过滤
@@ -391,13 +394,30 @@ ai:
   # 完整列表: https://docs.litellm.ai/docs/providers
   # 如果你对于看英文文档比较头疼，那么可以点击页面右下角的 【Ask AI】 ,用中文询问怎么配置
 
-  model: "openai/glm-4-flash"
+  model: "openai/glm-4-flash-250414"  # 锁定版本：GLM-4-Flash-250414（免费，128K 上下文，最大输出 16K）
+                                      # 旧别名 glm-4-flash 对应版本不明确（旧版最大输出仅 4K）
 
   api_key: ""                       # API Key（建议使用环境变量 AI_API_KEY）
-  
-  api_base: "https://open.bigmodel.cn/api/paas/v4"   # 智谱GLM官方端点
-  analysis_model: "openai/glm-4-flash"      # 分析专用(与翻译同模型, 稳定不限流; 如需推理可改 glm-4.7-flash)
-                                            # 推理模型适合分析/筛选等复杂判断；翻译保持用快速模型
+
+  api_base: "https://open.bigmodel.cn/api/paas/v4"   # 智谱GLM官方端点（env AI_API_BASE 优先）
+
+  # ── 按功能的模型覆盖（留空 = 沿用上方 model）──────────────────────
+  # 优先级（以分析为例，翻译/去重/筛选/日报同理，环境变量永远优先于 yaml）：
+  #   env AI_ANALYSIS_MODEL > env AI_MODEL > ai.analysis_model > ai.model
+  #   env AI_TRANSLATION_MODEL > env AI_MODEL > ai.translation_model > ai.model
+  #   env AI_DEDUP_MODEL > env AI_MODEL > ai.dedup_model > ai.model
+  #   env AI_FILTER_MODEL > env AI_MODEL > ai.filter_model > ai.model
+  #   日报（daily 模式的分析）：env AI_DAILY_MODEL > env AI_ANALYSIS_MODEL > env AI_MODEL
+  #                              > ai.daily_model > ai.analysis_model > ai.model
+  # 也就是说：只要设置了 env AI_MODEL（如 GitHub Secret），yaml 里的 *_model 都不会再"劫持"它。
+  # 端点同理：env AI_<功能>_API_BASE > ai.<功能>_api_base > env AI_API_BASE > ai.api_base
+  #   （如 AI_ANALYSIS_API_BASE / ai.analysis_api_base；Key 为 AI_<功能>_API_KEY）
+  # ⚠️ 用环境变量换模型时请同时设置 AI_API_BASE，否则模型名会被发到 yaml 里的端点。
+  analysis_model: ""                # 分析专用模型（如需推理可填 openai/glm-4.7-flash，并调大 timeout）
+  translation_model: ""             # 翻译专用模型（建议保持快速模型）
+  dedup_model: ""                   # 语义去重专用模型
+  filter_model: ""                  # AI 智能筛选专用模型
+  daily_model: ""                   # AI 日报（daily 模式分析）专用模型
                                     #
                                     # ❓ 什么时候需要填？
                                     #    当你使用的 AI 服务商不在上方支持列表中时。
@@ -418,19 +438,35 @@ ai:
                                     #    这样几乎任何服务商都能接入。
 
 
-  timeout: 120                      # 请求超时（秒）
+  timeout: 60                       # 单次请求超时（秒，env AI_TIMEOUT 优先）；还会被压到"剩余 AI 总预算"以内
 
-  temperature: 1.0                  # 采样温度 (0.0-2.0)
+  temperature: 0.7                  # 采样温度（AI 分析使用；GLM 取值 0.0~1.0，1.0 为随机性上限）
+                                    # 翻译/去重/筛选是确定性任务，默认分别用 0.2/0.1/0.1（见各功能段 temperature）
                                     # 注意：部分模型(如 gpt-5)可能要求必须为 1.0，否则会报错
-  
-  max_tokens: 8000                  # 最大生成 token 数（推理模型需更大空间容纳思维链）
+
+  max_tokens: 4000                  # 最大生成 token 数（各功能段可用 max_tokens 单独覆盖）
+                                    # 输出被截断（finish_reason=length）一律按失败处理，不会把残缺内容推送出去
                                     # 注意：如果 API 不支持此参数(报 HTTP 400)，请设为 0 以禁用发送
   # 高级选项
-  num_retries: 1                    # 失败重试次数
+  num_retries: 0                    # 失败重试次数。litellm 的 num_retries=N 实际约 N+2 次 HTTP 尝试，
+                                    # 默认 0 = 单次尝试，耗时可预测（失败由各功能的降级逻辑兜底）
   fallback_models: []               # 备用模型列表（可选）
                                     # 示例: ["openai/gpt-4o-mini", "openai/deepseek-ai/DeepSeek-V3"]
 
-  # 额外参数（一般无需修改，删掉 # 号即可启用）
+  # ── 全局 AI 时间预算（每个进程一份，分析/翻译/去重/筛选共用）────────
+  # 防止慢/挂起的 AI 服务把一轮运行拖过 cron 间隔：从本进程第一次 AI 调用开始计时，
+  # 用尽后剩余 AI 工作全部跳过（保留原文/不出分析），主流程照常发布。
+  total_budget_seconds: 480         # 本进程 AI 总预算（秒，env AI_TOTAL_BUDGET_SECONDS 优先，0=不限制）
+  min_request_seconds: 15           # 剩余预算低于此值时不再发起新请求（env AI_MIN_REQUEST_SECONDS）
+  circuit_breaker_threshold: 3      # 连续 N 次调用异常后熔断本进程剩余 AI 功能（env AI_CIRCUIT_BREAKER_THRESHOLD）
+
+  # ── AI 结果缓存（翻译 / 去重共用）──────────────────────────────
+  cache_db_path: "output/ai_cache.db"   # 缓存库路径（相对仓库根，env AI_CACHE_DB 优先）
+                                        # GitHub Actions 每次全新 checkout，需用 actions/cache 持久化此文件才能跨运行命中
+  cache_ttl_days: 7                 # 缓存有效期（天，env AI_CACHE_TTL_DAYS 优先，0=永不过期）
+                                    # env AI_CACHE_ENABLED=false 为总闸：一键关闭所有 AI 缓存
+
+  # 额外参数（透传给 litellm 的每次请求；一般无需修改，删掉 # 号即可启用）
   # extra_params:
   #   top_p: 1.0
   #   presence_penalty: 0.0
@@ -474,8 +510,12 @@ ai_translation:
   language: "中文"                   # 翻译目标语言（如 "English", "Korean", "法语"）
   prompt_file: "ai_translation_prompt.txt"   # 提示词文件（相对于 config 目录）
 
-  batch_size: 100                   # 每批发送给 AI 的标题数，超过此数量自动分批
-  batch_interval: 2                 # 分批间隔（秒），避免触发 API 限流，0=不等待
+  batch_size: 100                   # 每批发送给 AI 的标题数，超过此数量自动分批（env AI_TRANSLATION_BATCH_SIZE 优先）
+  batch_interval: 2                 # 分批间隔（秒），避免触发 API 限流，0=不等待（env AI_TRANSLATION_BATCH_INTERVAL）
+  cache_enabled: true               # 是否缓存译文（true=缓存, false=不缓存；env AI_CACHE_ENABLED=false 为总闸）
+  temperature: 0.2                  # 翻译温度（确定性任务，宜低）
+  max_split_depth: 2                # 译文编号对齐失败时的二分重试深度（0=不重试，直接保留原文）
+                                    # 编号缺失/重复/条数不符的结果一律丢弃，绝不按行顺序"猜"对齐，也不写缓存
 
   # 翻译范围（display.regions 关闭的区域即使开启也不会翻译）
   scope:
@@ -492,8 +532,9 @@ ai_translation:
 # AI 判定"同事件"分组（推荐 glm-4-flash，完全免费），同组标题合并为
 # 一条：来源以"+"连接，排名轨迹合并，出现次数取最大值。
 #
-# 安全性：AI 失败/超时/解析失败时自动跳过去重，不影响正常报告；
-# 判定结果持久缓存（output/ai_cache.db），同一批标题跨运行零成本。
+# 安全性：AI 失败/超时/截断/解析失败时自动跳过去重，不影响正常报告；
+# 判定结果缓存在 ai.cache_db_path（默认 output/ai_cache.db）：同一 job 内复用；
+# CI 上跨运行复用需持久化该文件（Actions 默认每次全新 checkout）。
 # ===============================================================
 ai_dedup:
   enabled: true                    # 是否启用语义去重（true=启用, false=关闭）
@@ -503,6 +544,9 @@ ai_dedup:
 
   cache_enabled: true               # 是否缓存 AI 判定结果（true=缓存, false=不缓存）
   prompt_file: "ai_dedup_prompt.txt"   # 提示词文件（相对于 config 目录）
+  temperature: 0.1                  # 去重温度（确定性任务，宜低，避免每次分组不同）
+  max_group_size: 5                 # 单组最多合并条数，AI 给出更大的组视为不可信并拆回单条
+  budget_seconds: 300               # 去重环节预算（秒，跨所有关键词组共享；同时受 ai.total_budget_seconds 约束）
 
 
 # ===============================================================
@@ -516,6 +560,7 @@ ai_dedup:
 # ===============================================================
 ai_daily:
   enabled: true                     # 是否生成 AI 日报页（true=启用, false=关闭）
+                                    # 日报内容来自 daily 模式的 AI 分析，模型见 ai.daily_model / env AI_DAILY_MODEL
 
 
 # ===============================================================

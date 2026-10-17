@@ -5,14 +5,75 @@ AI 分析结果格式化模块
 将 AI 分析结果格式化为各推送渠道的样式
 """
 
+import copy
+import functools
 import html as html_lib
 import re
-from .analyzer import AIAnalysisResult
+
+from trendradar.core.logger import get_logger
+
+from .analyzer import AIAnalysisResult, TEXT_FIELDS, as_text, normalize_result_fields
+
+log = get_logger(__name__)
+
+_MD_LINK = re.compile(r"!?\[([^\]\n]*)\]\(([^)\n]*)\)")
+_BARE_URL = re.compile(r"(?i)\b(?:https?|ftp)://[^\s<>()\[\]，。；！？]+")
+_AT_TAG = re.compile(r"(?is)<at\b[^>]*>.*?</at>|<at\b[^>]*/?>")
+_MENTION = re.compile(r"(?i)@(?=(?:all|everyone|here|channel|所有人)\b|所有人)")
+
+
+def sanitize_push_text(text: str) -> str:
+    """推送渠道对 LLM 输出的最小清洗（审计 #16，防提示词注入的钓鱼链接 / @所有人）：
+
+    - Markdown 链接 ``[文字](url)`` 降级为纯文字，裸 URL 替换为"[链接已移除]"；
+    - 去掉飞书 ``<at>`` 提醒标签与 ``@all/@所有人/@everyone/@here``；
+    - ``< >`` 替换为全角，避免被渲染为 HTML/卡片标签（如 Slack ``<!channel>``、飞书 ``<font>``）。
+    """
+    if not text:
+        return ""
+    s = as_text(text)
+    s = _MD_LINK.sub(lambda m: m.group(1), s)
+    s = _BARE_URL.sub("[链接已移除]", s)
+    s = _AT_TAG.sub("", s)
+    s = _MENTION.sub("", s)
+    return s.replace("<", "＜").replace(">", "＞")
+
+
+def _prepare_result(result: AIAnalysisResult, sanitize: bool) -> AIAnalysisResult:
+    r = copy.copy(result)
+    normalize_result_fields(r)
+    if sanitize:
+        for name in TEXT_FIELDS:
+            setattr(r, name, sanitize_push_text(getattr(r, name)))
+        r.standalone_summaries = {
+            sanitize_push_text(k): sanitize_push_text(v) for k, v in r.standalone_summaries.items()
+        }
+        r.error = sanitize_push_text(r.error)
+    return r
+
+
+def _safe_renderer(sanitize: bool):
+    """渲染保护：字段先归一化为 str（LLM 可能返回数组/对象），任何渲染异常返回空串。
+
+    AI 区块是附加内容，渲染失败绝不能连累主报告 / 推送（审计 #1）。
+    """
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapper(result, *args, **kwargs):
+            if result is None:
+                return ""
+            try:
+                return fn(_prepare_result(result, sanitize), *args, **kwargs)
+            except Exception as e:
+                log.warning(f"[AI] 渲染 AI 分析区块失败（已跳过该区块）: {type(e).__name__}: {e}")
+                return ""
+        return wrapper
+    return deco
 
 
 def _escape_html(text: str) -> str:
     """转义 HTML 特殊字符，防止 XSS 攻击"""
-    return html_lib.escape(text) if text else ""
+    return html_lib.escape(as_text(text)) if text else ""
 
 
 def _format_list_content(text: str) -> str:
@@ -22,9 +83,10 @@ def _format_list_content(text: str) -> str:
     1. xxx
     2. yyy
     """
+    text = as_text(text)
     if not text:
         return ""
-    
+
     # 去除首尾空白，防止 AI 返回的内容开头就有换行导致显示空行
     text = text.strip()
 
@@ -80,6 +142,7 @@ def _format_standalone_summaries(
         return ""
     lines = []
     for source_name, summary in summaries.items():
+        summary = as_text(summary)
         if summary:
             lines.append(f"{bracket_left}{source_name}{bracket_right}:\n{summary}")
     return "\n\n".join(lines)
@@ -133,11 +196,13 @@ def _render_ai_analysis_markdown_like(
     return "\n".join(lines)
 
 
+@_safe_renderer(sanitize=True)
 def render_ai_analysis_markdown(result: AIAnalysisResult) -> str:
     """渲染为通用 Markdown 格式（企业微信、ntfy、Slack）"""
     return _render_ai_analysis_markdown_like(result)
 
 
+@_safe_renderer(sanitize=True)
 def render_ai_analysis_feishu(result: AIAnalysisResult) -> str:
     """渲染为飞书卡片 2.0 markdown 格式
 
@@ -150,6 +215,7 @@ def render_ai_analysis_feishu(result: AIAnalysisResult) -> str:
     )
 
 
+@_safe_renderer(sanitize=True)
 def render_ai_analysis_dingtalk(result: AIAnalysisResult) -> str:
     """渲染为钉钉 Markdown 格式"""
     if not result.success:
@@ -194,6 +260,7 @@ def render_ai_analysis_dingtalk(result: AIAnalysisResult) -> str:
     return "\n".join(lines)
 
 
+@_safe_renderer(sanitize=True)
 def render_ai_analysis_plain(result: AIAnalysisResult) -> str:
     """渲染为纯文本格式"""
     if not result.success:
@@ -228,6 +295,7 @@ def render_ai_analysis_plain(result: AIAnalysisResult) -> str:
     return "\n".join(lines)
 
 
+@_safe_renderer(sanitize=True)
 def render_ai_analysis_telegram(result: AIAnalysisResult) -> str:
     """渲染为 Telegram HTML 格式（配合 parse_mode: HTML）
 
@@ -280,6 +348,7 @@ def get_ai_analysis_renderer(channel: str):
     return renderers.get(channel, render_ai_analysis_markdown)
 
 
+@_safe_renderer(sanitize=False)
 def render_ai_analysis_html_rich(result: AIAnalysisResult) -> str:
     """渲染为丰富样式的 HTML 格式（HTML 报告用）"""
     if not result:
