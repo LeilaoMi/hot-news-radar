@@ -5,8 +5,12 @@
 - 幂等注入站点导航条与展开/收起按钮到全部快照页
 """
 import re
+import sys
 from pathlib import Path
 from datetime import datetime
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from site_common import now_site, snapshots  # noqa: E402
 
 BASE = Path("docs/reports")
 DOCS = Path("docs")
@@ -237,7 +241,7 @@ def build_html(days):
         body.append('</div></details>')
     foot = (
         '<p style="text-align:center;margin-top:10px"><small>最后更新：'
-        + datetime.now().strftime('%Y-%m-%d %H:%M') + '</small></p></main>'
+        + now_site().strftime('%Y-%m-%d %H:%M') + ' (北京时间)</small></p></main>'
         '<footer>Powered by TrendRadar · GPL-3.0 · 数据每小时自动更新</footer>'
         '</body></html>'
     )
@@ -259,8 +263,10 @@ def inject_nav(html_path):
     if "rdr-nav" not in s:
         missing.append(_nav_for(html_path))
         changed = True
-    elif "rdr-ai-daily" not in s:
-        # 导航版本升级：旧版导航没有 AI 日报入口（lambda 替换避免 re.sub 转义陷阱）
+    elif "rdr-ai-daily" not in s or _nav_for(html_path) not in s:
+        # 导航版本升级（旧版缺 AI 日报入口），或页面被复制到别的层级后相对前缀不对
+        # （例如 reports/index.html 是 latest/current.html 的拷贝，带的是 ../../ 前缀，
+        # 审计 4.8）：原位替换为当前版、当前层级的导航（lambda 替换避免 re.sub 转义陷阱）
         s = re.sub(r'<div id="rdr-nav".*?</div>',
                    lambda _m: _nav_for(html_path), s, count=1, flags=re.S)
         changed = True
@@ -283,41 +289,64 @@ def inject_nav(html_path):
     html_path.write_text(s, encoding="utf-8")
     return True
 
+PN_RE = re.compile(r'<div id="rdr-pn"[^>]*>.*?</div>', re.S)
+
+
+def _pn_label(x, text):
+    if x is None:
+        return '<span style="opacity:.3">' + text + '</span>'
+    return ('<a href="' + x.name + '" style="color:#79c0ff;text-decoration:none">'
+            + text + '</a>')
+
+
+def build_prevnext_bar(prev_f, next_f):
+    """上一时刻/下一时刻 浮动导航条（纯函数，便于测试）。"""
+    prev_txt = '&#9664; 更早' + (' &#183; ' + prev_f.stem.replace('-', ':') if prev_f else '')
+    next_txt = ('更晚 &#183; ' + next_f.stem.replace('-', ':') + ' ' if next_f else '更晚 ') + '&#9654;'
+    return ('<div id="rdr-pn" style="position:fixed;bottom:18px;left:50%;transform:translateX(-50%);'
+            'z-index:9998;background:rgba(255,255,255,.85);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);'
+            'border:1px solid rgba(0,0,0,.08);color:#24292f;border-radius:999px;padding:8px 18px;font-size:13px;'
+            'display:flex;gap:10px;align-items:center;'
+            'font-family:-apple-system,\'PingFang SC\',sans-serif;box-shadow:0 4px 22px rgba(0,0,0,.12)">'
+            + _pn_label(prev_f, prev_txt)
+            + '<span style="opacity:.3">|</span>'
+            + _pn_label(next_f, next_txt) + '</div>')
+
+
 def inject_prevnext():
-    """为同一日期目录内的快照页注入 上一时刻/下一时刻 导航（幂等：rdr-pn 标记）"""
+    """为同一日期目录内的快照页注入/刷新 上一时刻/下一时刻 导航。
+
+    旧实现以 rdr-pn 标记做幂等：一旦写入就不再更新，于是新快照生成时还是
+    当天最后一份（「更晚」灰掉），之后再也不会补上链接；「更早」算出来却从未渲染
+    （审计 3.2）。现在每次按当前目录内容重算整条导航，内容不变的页面不重写，
+    所以每轮通常只改动「上一份最新快照」和「新快照」两个文件。
+    """
     count = 0
     for d in sorted(BASE.iterdir()):
         if not (d.is_dir() and DATE_RE.match(d.name)):
             continue
-        files = sorted(d.glob("*.html"))
-        if len(files) < 2:
-            continue
+        files = snapshots(d)  # 只认 HH-MM.html
         for i, f in enumerate(files):
+            prev_f = files[i - 1] if i > 0 else None          # 时间正序：前一个 = 更早
+            next_f = files[i + 1] if i < len(files) - 1 else None
+            if prev_f is None and next_f is None:
+                bar = ""  # 当天只有一份：不需要导航
+            else:
+                bar = build_prevnext_bar(prev_f, next_f)
             try:
                 s = f.read_text(encoding="utf-8")
             except Exception:
                 continue
-            if "rdr-pn" in s:
-                continue
-            prev_f = files[i - 1] if i > 0 else None          # 时间正序时前一个=更早
-            next_f = files[i + 1] if i < len(files) - 1 else None
-            def label(x, t):
-                return ('<a href="' + x.name + '" style="color:#79c0ff;text-decoration:none">'
-                        + t + ' &#183; ' + x.stem.replace('-', ':') + '</a>') if x else \
-                       ('<span style="opacity:.3">' + t + '</span>')
-            bar = ('<div id="rdr-pn" style="position:fixed;bottom:18px;left:50%;transform:translateX(-50%);'
-                   'z-index:9998;background:rgba(255,255,255,.85);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);'
-                   'border:1px solid rgba(0,0,0,.08);color:#24292f;border-radius:999px;padding:8px 18px;font-size:13px;'
-                   'display:flex;gap:10px;align-items:center;'
-                   'font-family:-apple-system,\'PingFang SC\',sans-serif;box-shadow:0 4px 22px rgba(0,0,0,.12)">'
-                   + label(next_f, '更晚 &#9654;') + '</div>')
-            m = re.search(r'(<body[^>]*>)', s)
-            if m:
-                s = s[:m.end()] + bar + s[m.end():]
+            if PN_RE.search(s):
+                new = PN_RE.sub(lambda _m: bar, s, count=1)
+            elif bar:
+                m = re.search(r'(<body[^>]*>)', s)
+                new = (s[:m.end()] + bar + s[m.end():]) if m else (bar + s)
             else:
-                s = bar + s
-            f.write_text(s, encoding="utf-8")
-            count += 1
+                new = s
+            if new != s:
+                f.write_text(new, encoding="utf-8")
+                count += 1
     return count
 
 def main():
@@ -333,6 +362,10 @@ def main():
         f = BASE / "latest" / n
         if f.exists() and inject_nav(f):
             injected += 1
+    # reports/index.html 是 latest/*.html 的拷贝，层级不同，需要按自身层级修正导航
+    idx = BASE / "index.html"
+    if idx.exists() and inject_nav(idx):
+        injected += 1
     if injected:
         print(f"导航条已注入 {injected} 个页面")
     pn = inject_prevnext()

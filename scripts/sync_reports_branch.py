@@ -1,298 +1,279 @@
 #!/usr/bin/env python3
 # coding=utf-8
-"""把 Pages 内容同步到 reports 分支（GitHub Pages 的发布源）。
+"""把 Pages 内容（本地 docs/ 目录）同步到 reports 分支（GitHub Pages 的发布源）。
 
-两种取数模式
+工作方式
+--------
+CI 在运行开头已经把 reports 分支浅克隆到 ``--repo-dir``（默认 /tmp/pages-content），
+本脚本借用这个克隆的对象库：
+
+1. 用临时 index 把 ``--from-dir``（默认 docs）整个目录写成一棵 git tree；
+   未变化的文件 blob 已在对象库里，push 时只会上传真正变化的对象。
+2. 以这棵 tree 创建**孤儿提交**（无 parent，reports 分支不需要历史，旧对象交给 gc）。
+3. 用 ``git push --force-with-lease=refs/heads/reports:<克隆时的 OID>`` 原子地更新 ref：
+   只有远端仍指向我们开始时看到的那个提交才会成功（服务端比较并交换，CAS）。
+
+为什么必须 CAS（审计 3.1 a/b/c）
+---------------------------------
+旧实现走 REST API：删除列表按「同步时刻的远端」计算、最后 ``PATCH force:true``。
+如果在本次运行克隆之后、同步之前有别的运行发布过，它新增的快照会被当成
+「retention 清理」删掉，而且 ref 被无条件覆盖。
+
+冲突时的处理
 ------------
---from-ref=master（默认，迁移过渡期用）
-    reports 分支检出后有 169 MB（1023 份报告快照，每天还在 +2 MB）。若在 CI 里
-    clone 该分支再 commit/push，每次运行都要多拉一遍 169 MB，一天 48 次。
-    该模式下新 tree 直接复用 master 已有的 blob sha，是**纯指针操作、零上传**，
-    耗时与仓库体积无关。retention 清掉的旧快照不在新 tree 里，等于自动完成删除。
-    代价：要求 master 上仍保留 docs/reports/。
-
---from-dir=docs（迁移完成后用）
-    master 清掉 docs/reports/ 之后，上面那条路就读不到报告了。该模式改从本地
-    工作区取数：先在本地算出每个文件的 git blob sha，与 reports 分支当前内容
-    比对，**只上传真正变化的文件**（通常几个快照约 2 MB），未变化的由 base_tree
-    原样保留；本地已不存在的文件用 sha=null 从 tree 中删除。
-
-为什么每次都是孤儿提交（无 parent）
------------------------------------
-若做成增量提交，一天 48 个 commit，每个 commit 引用一棵 1000+ 条目的 tree，
-光 tree 对象就能在 90 天内堆到 170 MB。reports 分支只是 Pages 的内容快照，
-不需要历史，因此每次新建孤儿 commit 并把 ref 强指过去，旧 tree 变为 unreachable
-后由 GitHub 的 gc 回收。
+lease 失败说明远端被别的运行更新了。脚本会抓取新的远端提交，做一次三方合并：
+对方改动过、而本次没有改动的路径（相对克隆时的基线）一律采用对方版本
+（新增 / 修改 / 删除都照搬），双方都改的路径以本次为准（归档页等索引下一轮会重算）。
+然后以新提交为基线重试，最多 ``SYNC_MAX_ATTEMPTS`` 次（默认 3）。
 
 安全兜底
 --------
-强指 ref 是破坏性操作，因此加了 MIN_FILES 阈值：文件数低于该值视为异常
-（上游内容缺失或读取失败），直接拒绝提交而不是把线上替换成残缺版本。
-另外提交后会回读校验，不一致即失败退出。
+- 文件数低于 MIN_FILES（默认 500，可用 SYNC_MIN_FILES 覆盖）拒绝提交，
+  防止上游内容缺失时把线上替换成残缺版本。
+- 推送后用 ``git ls-remote`` 回读校验 ref 确实指向本次提交。
 
 用法
 ----
-    GITHUB_TOKEN=xxx python3 scripts/sync_reports_branch.py [--dry-run]
-    GITHUB_TOKEN=xxx python3 scripts/sync_reports_branch.py --from-dir=docs
+    GITHUB_TOKEN=xxx python3 scripts/sync_reports_branch.py --from-dir=docs \\
+        --repo-dir=/tmp/pages-content [--expect-oid=<sha>] [--remote=<url>] [--dry-run]
 
 环境变量：
-    GITHUB_TOKEN       必填，需 contents: write 权限
+    GITHUB_TOKEN       推送用 token（contents: write）；只通过一次性的 http.extraheader 传给 git，
+                       不写入任何 git 配置文件
     GITHUB_REPOSITORY  形如 owner/repo，CI 里自动注入
     REPORTS_BRANCH     目标分支，默认 reports
 """
 
-import hashlib
-import json
+import base64
 import os
+import subprocess
 import sys
+import tempfile
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 REPO = os.environ.get("GITHUB_REPOSITORY", "LeilaoMi/hot-news-radar")
-TOKEN = os.environ.get("GITHUB_TOKEN", "")
 REPORTS_BRANCH = os.environ.get("REPORTS_BRANCH", "reports")
-
-# 单次 create-tree 的条目数上限，实测 1041 个一次性提交会 502，分批累积可绕开
-BATCH = 100
-
-# 低于此文件数拒绝提交，防止把线上替换成残缺内容
-# （正常情况下 docs/ 下有 1000+ 个文件：18 个静态壳 + 千份报告快照）
-# 可用 SYNC_MIN_FILES 覆盖，仅为便于在样本较少的目录上做演练
 MIN_FILES = int(os.environ.get("SYNC_MIN_FILES", "500"))
-
-DRY = "--dry-run" in sys.argv
-API = f"https://api.github.com/repos/{REPO}"
+MAX_ATTEMPTS = int(os.environ.get("SYNC_MAX_ATTEMPTS", "3"))
 
 
-def parse_args():
-    """解析 --from-ref=X / --from-dir=X，默认 --from-ref=master。"""
-    for a in sys.argv[1:]:
-        if a.startswith("--from-ref="):
-            return ("ref", a.split("=", 1)[1])
-        if a.startswith("--from-dir="):
-            return ("dir", a.split("=", 1)[1])
-    return ("ref", "master")
+class LeaseRejected(Exception):
+    """远端 ref 已不是预期的基线提交。"""
 
 
-def api(method, path, payload=None):
-    data = json.dumps(payload).encode() if payload is not None else None
-    req = urllib.request.Request(
-        API + path if path.startswith("/") else path,
-        data=data,
-        method=method,
-        headers={
-            "Authorization": "Bearer " + TOKEN,
-            "Accept": "application/vnd.github+json",
-            "Content-Type": "application/json",
-            "User-Agent": "sync-reports-branch",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=180) as r:
-            raw = r.read()
-            return json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as e:
-        body = e.read().decode(errors="ignore")
-        print(f"  HTTP {e.code} {method} {path}\n  {body[:400]}", file=sys.stderr)
-        raise
+def parse_args(argv):
+    opts = {
+        "from_dir": "docs",
+        "repo_dir": "/tmp/pages-content",
+        "expect_oid": "",
+        "remote": "",
+        "dry_run": False,
+    }
+    for a in argv:
+        if a == "--dry-run":
+            opts["dry_run"] = True
+        elif a.startswith("--from-dir="):
+            opts["from_dir"] = a.split("=", 1)[1]
+        elif a.startswith("--repo-dir="):
+            opts["repo_dir"] = a.split("=", 1)[1]
+        elif a.startswith("--expect-oid="):
+            opts["expect_oid"] = a.split("=", 1)[1]
+        elif a.startswith("--remote="):
+            opts["remote"] = a.split("=", 1)[1]
+        elif a.startswith("--from-ref="):
+            sys.exit("错误：--from-ref 模式已移除（master 不再存放 docs/reports），请用 --from-dir=docs")
+        else:
+            sys.exit(f"错误：未知参数 {a}")
+    return opts
 
 
-def http_json(method, path, payload=None, retries=5):
-    """带退避重试：网关偶发 5xx，重试即可恢复。"""
-    for attempt in range(1, retries + 1):
-        try:
-            return api(method, path, payload)
-        except urllib.error.HTTPError as e:
-            if e.code < 500 or attempt == retries:
-                raise
-            print(f"    {e.code}，第 {attempt}/{retries} 次重试 …")
-            time.sleep(2 * attempt)
-    raise RuntimeError("unreachable")
+class Git:
+    def __init__(self, repo_dir, remote, token=""):
+        self.git_dir = str(Path(repo_dir) / ".git")
+        if not Path(self.git_dir).is_dir():
+            sys.exit(f"错误：{repo_dir} 不是 git 克隆（缺少 .git）")
+        self.remote = remote
+        self.auth = []
+        if token and remote.startswith("https://"):
+            cred = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+            # 只作用于本次命令，不落盘
+            self.auth = ["-c", f"http.extraheader=AUTHORIZATION: basic {cred}"]
+
+    def run(self, *args, env=None, check=True, net=False, input_bytes=None, cwd=None):
+        cmd = ["git"] + (self.auth if net else []) + ["--git-dir", self.git_dir] + list(args)
+        full_env = dict(os.environ)
+        full_env.setdefault("GIT_AUTHOR_NAME", "github-actions[bot]")
+        full_env.setdefault("GIT_AUTHOR_EMAIL", "41898282+github-actions[bot]@users.noreply.github.com")
+        full_env.setdefault("GIT_COMMITTER_NAME", full_env["GIT_AUTHOR_NAME"])
+        full_env.setdefault("GIT_COMMITTER_EMAIL", full_env["GIT_AUTHOR_EMAIL"])
+        if env:
+            full_env.update(env)
+        r = subprocess.run(cmd, env=full_env, capture_output=True, input=input_bytes, cwd=cwd)
+        if check and r.returncode != 0:
+            raise RuntimeError(
+                f"git {' '.join(args[:3])} 失败（{r.returncode}）：{r.stderr.decode(errors='ignore').strip()[:800]}"
+            )
+        return r
+
+    def out(self, *args, **kw):
+        return self.run(*args, **kw).stdout.decode().strip()
+
+    # ── 远端 ───────────────────────────────────────────────────────────
+    def remote_oid(self):
+        line = self.out("ls-remote", self.remote, f"refs/heads/{REPORTS_BRANCH}", net=True)
+        return line.split()[0] if line else ""
+
+    def fetch_tip(self):
+        self.run("fetch", "--quiet", "--depth", "1", self.remote,
+                 f"refs/heads/{REPORTS_BRANCH}", net=True)
+        return self.out("rev-parse", "FETCH_HEAD")
+
+    def push_with_lease(self, commit, expect):
+        lease = f"--force-with-lease=refs/heads/{REPORTS_BRANCH}:{expect}"
+        r = self.run("push", "--porcelain", lease, self.remote,
+                     f"{commit}:refs/heads/{REPORTS_BRANCH}", check=False, net=True)
+        if r.returncode == 0:
+            return
+        msg = (r.stdout + r.stderr).decode(errors="ignore")
+        # lease 失败（stale info / rejected）与网络等其它错误要区分开：
+        # 回读远端，确实已不是 expect 才算冲突，可以合并后重试。
+        current = self.remote_oid()
+        if current and current != expect:
+            raise LeaseRejected(current)
+        raise RuntimeError(f"git push 失败：{msg.strip()[:800]}")
+
+    # ── 本地对象 ───────────────────────────────────────────────────────
+    def tree_of(self, commit):
+        return self.out("rev-parse", f"{commit}^{{tree}}")
+
+    def ls_tree(self, treeish):
+        """返回 {path: (mode, sha)}，只含 blob。"""
+        raw = self.run("ls-tree", "-r", "-z", treeish).stdout.decode("utf-8", errors="surrogateescape")
+        res = {}
+        for rec in raw.split("\0"):
+            if not rec:
+                continue
+            meta, path = rec.split("\t", 1)
+            mode, typ, sha = meta.split()
+            if typ == "blob":
+                res[path] = (mode, sha)
+        return res
+
+    def write_tree_from_dir(self, work_tree):
+        with tempfile.TemporaryDirectory() as td:
+            env = {"GIT_INDEX_FILE": str(Path(td) / "index"), "GIT_WORK_TREE": str(work_tree)}
+            # -f：忽略 .gitignore；-A：包括删除。--git-dir 已显式指定，work-tree 走环境变量
+            self.run("add", "-A", "-f", ".", env=env, cwd=str(work_tree))
+            return self.out("write-tree", env=env)
+
+    def commit_orphan(self, tree, message):
+        return self.out("commit-tree", tree, "-m", message)
+
+    def blob_bytes(self, sha):
+        return self.run("cat-file", "blob", sha).stdout
 
 
-def get_tree(ref):
-    d = http_json("GET", f"/git/trees/{ref}?recursive=1")
-    if d.get("truncated"):
-        sys.exit(f"错误：{ref} 的文件树被截断，无法安全同步（需改成分批遍历）")
-    return d["tree"]
+def count_files(root: Path) -> int:
+    return sum(1 for p in root.rglob("*") if p.is_file())
 
 
-def branch_exists(branch):
-    try:
-        api("GET", f"/git/ref/heads/{branch}")
-        return True
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return False
-        raise
-
-
-def git_blob_sha(data: bytes) -> str:
-    """计算 git 的 blob 对象 sha1：sha1("blob <len>\\0" + 内容)。
-
-    有了它就能在本地判断文件是否变化，未变化的直接沿用旧 sha，不必重新上传。
-    """
-    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
-
-
-def create_blob(data: bytes) -> str:
-    import base64
-    return http_json("POST", "/git/blobs", {
-        "content": base64.b64encode(data).decode(),
-        "encoding": "base64",
-    })["sha"]
-
-
-# --------------------------------------------------------------------------
-# 取数：两种模式
-# --------------------------------------------------------------------------
-
-def collect_from_ref(ref):
-    """从远端 ref 的 docs/ 收集（零上传，复用既有 blob）。
-
-    返回 (entries, total_files, use_base_tree)。全量重建，因此不用 base_tree。
-    """
-    entries, seen = [], set()
-    for it in get_tree(ref):
-        if it["type"] != "blob" or not it["path"].startswith("docs/"):
+def merge_theirs_into_dir(git, work_tree: Path, base_commit, theirs_commit, ours_tree):
+    """把「对方改了、我们没改」的路径写回本地目录。返回 (采用对方的条目数, 双方都改的条目数)。"""
+    base = git.ls_tree(base_commit)
+    theirs = git.ls_tree(theirs_commit)
+    ours = git.ls_tree(ours_tree)
+    taken, both = 0, 0
+    for path in sorted(set(base) | set(theirs)):
+        b, t, o = base.get(path), theirs.get(path), ours.get(path)
+        if t == b:
+            continue            # 对方没动
+        if o != b:
+            if o != t:
+                both += 1       # 双方都改：以本次为准
             continue
-        path = it["path"][len("docs/"):]
-        if path in seen:
-            sys.exit(f"错误：路径冲突 {path}")
-        seen.add(path)
-        entries.append({"path": path, "mode": it["mode"],
-                        "type": "blob", "sha": it["sha"]})
-    return entries, len(entries), False
+        dest = work_tree / path
+        if t is None:
+            if dest.exists():
+                dest.unlink()
+        else:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(git.blob_bytes(t[1]))
+            if t[0] == "100755":
+                dest.chmod(0o755)
+        taken += 1
+    return taken, both
 
 
-def collect_from_dir(root, branch):
-    """从本地目录收集，只上传变化的文件。
-
-    返回 (entries, total_files, use_base_tree=True)。
-    """
-    base = Path(root)
-    if not base.is_dir():
-        sys.exit(f"错误：目录不存在 {root}")
-
-    local = {}
-    for p in base.rglob("*"):
-        if not p.is_file():
-            continue
-        rel = p.relative_to(base).as_posix()
-        data = p.read_bytes()
-        mode = "100755" if os.access(p, os.X_OK) else "100644"
-        local[rel] = (mode, git_blob_sha(data), data)
-
-    if not local:
-        sys.exit(f"错误：{root} 下没有任何文件")
-
-    # 远端当前内容（分支不存在时为空）
-    remote = {}
-    if branch_exists(branch):
-        remote = {i["path"]: i["sha"] for i in get_tree(branch) if i["type"] == "blob"}
-
-    entries, cache = [], {}
-    uploaded = 0
-    for rel, (mode, sha, data) in sorted(local.items()):
-        if remote.get(rel) == sha:
-            continue  # 未变化，由 base_tree 原样保留
-        if sha not in cache:
-            if DRY:
-                cache[sha] = sha  # dry-run 不真的上传
-            else:
-                cache[sha] = create_blob(data)
-                uploaded += 1
-        entries.append({"path": rel, "mode": mode, "type": "blob", "sha": cache[sha]})
-
-    # 本地已不存在的（retention 清理掉的旧快照）从 tree 中删除
-    for rel in sorted(set(remote) - set(local)):
-        entries.append({"path": rel, "mode": "100644", "type": "blob", "sha": None})
-
-    print(f"      本地 {len(local)} 个文件，需上传 {uploaded} 个，"
-          f"删除 {len(set(remote) - set(local))} 个，"
-          f"未变化 {len(local) - uploaded} 个（沿用旧 blob）")
-    return entries, len(local), True
+def summarize(git, base_tree, new_tree):
+    a = git.ls_tree(base_tree) if base_tree else {}
+    b = git.ls_tree(new_tree)
+    added = len(set(b) - set(a))
+    deleted = len(set(a) - set(b))
+    modified = sum(1 for p in set(a) & set(b) if a[p] != b[p])
+    return added, modified, deleted
 
 
-def main():
-    if not TOKEN:
+def main(argv=None):
+    opts = parse_args(sys.argv[1:] if argv is None else argv)
+    token = os.environ.get("GITHUB_TOKEN", "")
+    remote = opts["remote"] or f"https://github.com/{REPO}.git"
+    work_tree = Path(opts["from_dir"]).resolve()
+    if not work_tree.is_dir():
+        sys.exit(f"错误：目录不存在 {opts['from_dir']}")
+    if remote.startswith("https://") and not token and not opts["dry_run"]:
         sys.exit("错误：需要 GITHUB_TOKEN 环境变量")
 
-    mode, src = parse_args()
-    exists = branch_exists(REPORTS_BRANCH)
+    git = Git(opts["repo_dir"], remote, token)
 
-    print(f"[1/6] 模式：{'复用远端 blob（零上传）' if mode == 'ref' else '从本地目录上传'}"
-          f"  源={src}")
-    if mode == "ref":
-        entries, total, use_base = collect_from_ref(src)
-    else:
-        entries, total, use_base = collect_from_dir(src, REPORTS_BRANCH)
-
+    total = count_files(work_tree)
+    print(f"[1/5] 源目录 {opts['from_dir']}：{total} 个文件")
     if total < MIN_FILES:
-        sys.exit(
-            f"错误：只收集到 {total} 个文件，低于安全阈值 {MIN_FILES}，"
-            f"拒绝提交（可能是读取失败或源内容缺失）"
-        )
-    print(f"      合计 {total} 个文件")
+        sys.exit(f"错误：只收集到 {total} 个文件，低于安全阈值 {MIN_FILES}，拒绝提交（可能是读取失败或源内容缺失）")
 
-    print(f"[2/6] reports 分支{'已存在' if exists else '不存在（将创建）'}")
+    base = opts["expect_oid"] or git.out("rev-parse", "HEAD")
+    print(f"[2/5] 基线（克隆时的 {REPORTS_BRANCH}）：{base[:12]}")
 
-    if not entries:
-        print("      无增删变更，跳过提交")
-        return
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        tree = git.write_tree_from_dir(work_tree)
+        base_tree = git.tree_of(base)
+        added, modified, deleted = summarize(git, base_tree, tree)
+        print(f"[3/5] 第 {attempt} 次：tree {tree[:12]}（新增 {added} / 修改 {modified} / 删除 {deleted}）")
+        if tree == base_tree:
+            print("      与远端内容一致，无需提交")
+            return 0
+        if opts["dry_run"]:
+            print("[dry-run] 未提交、未推送")
+            return 0
 
-    if DRY:
-        print(f"\n[dry-run] 将提交 {len(entries)} 个变更条目"
-              f"（最终 {total} 个文件），未实际写入")
-        return
-
-    base_sha = None
-    if use_base and exists:
-        base_sha = api("GET", f"/git/ref/heads/{REPORTS_BRANCH}")["object"]["sha"]
-        base_sha = api("GET", f"/git/commits/{base_sha}")["tree"]["sha"]
-
-    print(f"[3/6] 分批创建 tree（每批 {BATCH} 条"
-          f"{'，base_tree 增量' if base_sha else '，全量重建'}）…")
-    tree_sha = base_sha
-    for i in range(0, len(entries), BATCH):
-        batch = entries[i:i + BATCH]
-        payload = {"tree": batch}
-        if tree_sha:
-            payload["base_tree"] = tree_sha
-        tree_sha = http_json("POST", "/git/trees", payload)["sha"]
-        print(f"      批次 {i // BATCH + 1}: {len(batch)} 条 -> {tree_sha[:12]}")
-    print(f"      tree: {tree_sha[:12]}")
-
-    print("[4/6] 创建孤儿 commit（不累积历史）…")
-    commit = http_json("POST", "/git/commits", {
-        "message": (
+        commit = git.commit_orphan(tree, (
             f"auto: sync Pages content ({time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())} UTC)\n\n"
-            f"由 scripts/sync_reports_branch.py 生成，取数模式 --from-{mode}。\n"
+            "由 scripts/sync_reports_branch.py 生成（--force-with-lease 原子更新）。\n"
             "孤儿提交，无历史，旧 tree 交由 gc 回收。"
-        ),
-        "tree": tree_sha,
-        "parents": [],
-    })
-    print(f"      commit: {commit['sha'][:12]}")
+        ))
+        print(f"[4/5] 孤儿提交 {commit[:12]}，推送（lease = {base[:12]}）…")
+        try:
+            git.push_with_lease(commit, base)
+        except LeaseRejected as e:
+            current = str(e)
+            print(f"      ⚠️ 远端已被其它运行更新为 {current[:12]}，合并对方的改动后重试")
+            if attempt == MAX_ATTEMPTS:
+                sys.exit(f"错误：连续 {MAX_ATTEMPTS} 次与并发运行冲突，放弃本次同步")
+            theirs = git.fetch_tip()
+            taken, both = merge_theirs_into_dir(git, work_tree, base, theirs, tree)
+            print(f"      采用对方的 {taken} 个条目；双方都改的 {both} 个以本次为准")
+            base = theirs
+            continue
 
-    print(f"[5/6] 更新 refs/heads/{REPORTS_BRANCH} …")
-    if exists:
-        http_json("PATCH", f"/git/refs/heads/{REPORTS_BRANCH}",
-                  {"sha": commit["sha"], "force": True})
-    else:
-        http_json("POST", "/git/refs",
-                  {"ref": f"refs/heads/{REPORTS_BRANCH}", "sha": commit["sha"]})
-
-    print(f"[6/6] 回读校验 …")
-    got = {i["path"]: i["sha"] for i in get_tree(REPORTS_BRANCH) if i["type"] == "blob"}
-    if len(got) != total:
-        print(f"  ❌ 校验失败：远端 {len(got)} 个文件，期望 {total} 个", file=sys.stderr)
-        sys.exit(1)
-
-    print(f"\n✅ 已同步 {len(got)} 个文件到 {REPORTS_BRANCH} -> {commit['sha']}")
+        print("[5/5] 回读校验 …")
+        got = git.remote_oid()
+        if got != commit:
+            print(f"  ❌ 校验失败：远端 {got[:12]}，期望 {commit[:12]}", file=sys.stderr)
+            return 1
+        print(f"\n✅ 已同步 {total} 个文件到 {REPORTS_BRANCH} -> {commit}")
+        return 0
+    return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

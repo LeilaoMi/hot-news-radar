@@ -8,6 +8,7 @@
 import importlib.util
 import os
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -24,6 +25,11 @@ def _load():
 
 
 mod = _load()
+
+
+def site_now() -> datetime:
+    """脚本按站点时区（Asia/Shanghai）的墙钟判断，测试也必须用同一个时钟。"""
+    return datetime.now(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
 
 
 def make_html(gen_dt: datetime, separate_lines: bool = True) -> str:
@@ -68,15 +74,16 @@ def freeze_clock(monkeypatch, when: datetime):
 # --------------------------------------------------------------------------
 # 基本场景（相对当前时间）
 # --------------------------------------------------------------------------
-def test_fresh_report_returns_zero(tmp_path):
-    """刚刚生成的报告 → 0（不需要补生成）。"""
-    p = write_report(tmp_path, datetime.now() - timedelta(minutes=5))
+def test_fresh_report_returns_zero(tmp_path, monkeypatch):
+    """今天刚刚生成的报告 → 0（不需要补生成）。钉死时钟避免跨午夜抖动。"""
+    now = freeze_clock(monkeypatch, datetime(2026, 6, 1, 12, 0, 0))
+    p = write_report(tmp_path, now - timedelta(minutes=5))
     assert mod.check(p) == 0
 
 
 def test_stale_report_returns_one(tmp_path):
     """9 天前生成的报告 → 1。"""
-    p = write_report(tmp_path, datetime.now() - timedelta(days=9))
+    p = write_report(tmp_path, site_now() - timedelta(days=9))
     assert mod.check(p) == 1
 
 
@@ -91,9 +98,10 @@ def test_unparseable_html_returns_one(tmp_path):
     assert mod.check(str(p)) == 1
 
 
-def test_single_line_markup_also_parses(tmp_path):
+def test_single_line_markup_also_parses(tmp_path, monkeypatch):
     """标签与值在同一行时同样要能解析。"""
-    p = write_report(tmp_path, datetime.now(), separate_lines=False)
+    now = freeze_clock(monkeypatch, datetime(2026, 6, 1, 12, 0, 0))
+    p = write_report(tmp_path, now, separate_lines=False)
     assert mod.check(p) == 0
 
 
@@ -110,8 +118,9 @@ def test_invalid_date_returns_one(tmp_path):
 
 def test_custom_threshold_is_respected(tmp_path, monkeypatch):
     """DAILY_MAX_AGE 应能覆盖默认 24 小时。"""
+    now = freeze_clock(monkeypatch, datetime(2026, 6, 1, 12, 0, 0))
     monkeypatch.setattr(mod, "MAX_AGE_SECONDS", 60)  # 1 分钟
-    p = write_report(tmp_path, datetime.now() - timedelta(minutes=10))
+    p = write_report(tmp_path, now - timedelta(minutes=10))
     assert mod.check(p) == 1
 
     monkeypatch.setattr(mod, "MAX_AGE_SECONDS", 48 * 3600)  # 48 小时
@@ -170,3 +179,26 @@ def test_unreadable_file_returns_one(tmp_path):
     d = tmp_path / "daily.html"
     d.mkdir()
     assert mod.check(str(d)) == 1
+
+
+# --------------------------------------------------------------------------
+# 「同一天」规则（站点时区）
+# --------------------------------------------------------------------------
+def test_yesterday_evening_is_stale_even_within_24h(tmp_path, monkeypatch):
+    """昨晚 22:20 的汇总，今天 18:50 查看：不足 24h，但已不是「当日」→ 1。"""
+    freeze_clock(monkeypatch, datetime(2026, 10, 17, 18, 50, 0))
+    p = write_report(tmp_path, datetime(2026, 10, 16, 22, 20, 0))
+    assert mod.check(p) == 1
+
+
+def test_just_after_midnight_is_stale(tmp_path, monkeypatch):
+    """00:05 时，23:55 生成的报告只过了 10 分钟，但属于昨天 → 1。"""
+    freeze_clock(monkeypatch, datetime(2026, 10, 18, 0, 5, 0))
+    p = write_report(tmp_path, datetime(2026, 10, 17, 23, 55, 0))
+    assert mod.check(p) == 1
+
+
+def test_same_day_morning_is_fresh(tmp_path, monkeypatch):
+    freeze_clock(monkeypatch, datetime(2026, 10, 17, 23, 0, 0))
+    p = write_report(tmp_path, datetime(2026, 10, 17, 0, 30, 0))
+    assert mod.check(p) == 0

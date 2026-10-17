@@ -5,21 +5,23 @@
 2. 多平台共振(同题多源)
 输出 docs/reports/trends.html
 """
-import re, html
-from pathlib import Path
-from datetime import datetime, timedelta
+import html
+import re
+import sys
 from collections import defaultdict
+from datetime import datetime, timedelta
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from site_common import now_site, snapshots  # noqa: E402
 
 BASE = Path("docs/reports")
 DAYS = int(__import__('os').environ.get("TREND_DAYS", "3"))
-SITE = "https://leilaomi.github.io/hot-news-radar"
-
-TITLE_RE = re.compile(r'<a[^>]+href="(http[^"]+)"[^>]*>([^<]{8,120})</a>')
 
 def extract(day_dir):
     """从单日目录所有快照提取 (标题 -> {platforms:set, times:[str]})"""
     agg = defaultdict(lambda: {"plats": set(), "times": [], "url": ""})
-    for f in sorted(day_dir.glob("*.html")):
+    for f in snapshots(day_dir):  # 只统计 HH-MM.html 时段快照，避免重复计数
         try:
             s = f.read_text(encoding="utf-8", errors="ignore")
         except Exception:
@@ -43,8 +45,9 @@ def extract(day_dir):
     return agg
 
 def main():
-    cutoff = datetime.now() - timedelta(days=DAYS)
-    all_agg = defaultdict(lambda: {"plats": set(), "count": 0, "days": set(), "url": "", "first": None})
+    # 按站点时区的「自然日」取最近 DAYS 天（含今天）
+    cutoff = datetime.combine((now_site() - timedelta(days=DAYS - 1)).date(), datetime.min.time())
+    all_agg = defaultdict(lambda: {"plats": set(), "count": 0, "days": set(), "url": ""})
     day_count = 0
     for d in sorted(BASE.iterdir(), reverse=True):
         m = re.match(r"^(\d{4})-(\d{2})-(\d{2})$", d.name)
@@ -60,9 +63,8 @@ def main():
             a["plats"] |= ent["plats"]
             a["count"] += len(ent["times"])
             a["days"].add(d.name)
-            if not a["url"]: a["url"] = ent["url"]
-            if a["first"] is None or d.name < a["first"]:
-                a["first"] = d.name
+            if not a["url"]:
+                a["url"] = ent["url"]
 
     rows = sorted(all_agg.items(), key=lambda kv: (-kv[1]["count"], -len(kv[1]["plats"])))
     total_titles = len(rows)
@@ -77,7 +79,7 @@ def main():
         return ('<table><thead><tr><th>#</th><th>标题</th><th>'+col_header+'</th><th>来源平台</th></tr></thead>'
                 '<tbody>'+trs+'</tbody></table>')
 
-    gen_at = datetime.now().strftime('%Y-%m-%d %H:%M')
+    gen_at = now_site().strftime('%Y-%m-%d %H:%M') + ' (北京时间)'
     page = f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>热点雷达 · 趋势洞察</title><style>
@@ -98,7 +100,7 @@ td a{{color:#24292f;text-decoration:none}}
 td a:hover{{color:#0969da}}
 .tag{{display:inline-block;background:#eef3fd;color:#0969da;border-radius:5px;padding:1px 7px;font-size:12px;margin:1px}}
 footer{{text-align:center;padding:22px;font-size:12px;color:#999}}</style></head><body>
-<nav><a href="/">&#127919; 新闻中心</a><a href="archive.html" style="color:#d2a8ff">&#128193; 历史</a><a href="latest/current.html" style="color:#7ee787">&#128293; 实时</a></nav>
+<nav><a href="../">&#127919; 新闻中心</a><a href="archive.html" style="color:#d2a8ff">&#128193; 历史</a><a href="latest/current.html" style="color:#7ee787">&#128293; 实时</a></nav>
 <header><h1>&#128200; 趋势洞察</h1><p>近 {day_count} 天 · 共分析 {total_titles} 条标题 · 每轮发布自动更新</p></header><main>
 <h2>&#128293; 持续热度榜</h2>
 <p class="sum">连续多时段/多日在榜 = 真正的重磅事件（上榜快照数 ≥ {max(6, DAYS*2)}）</p>

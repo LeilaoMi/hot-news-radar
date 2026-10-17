@@ -3,7 +3,12 @@
 
 退出码：
     0 = 报告新鲜，无需处理
-    1 = 报告缺失 / 无法解析 / 已过期，需要补生成
+    1 = 报告缺失 / 无法解析 / 不是站点时区「今天」生成的 / 已过期，需要补生成
+
+判定标准（2026-10 修订）：
+    「当日汇总」必须是**站点时区（默认 Asia/Shanghai）当天**生成的。旧实现只看
+    「是否在 24 小时内」，于是昨晚 22:20 的汇总会被当成新鲜，首页「当日汇总」
+    整个白天都显示昨天的内容。现在同时要求「同一天」与「age ≤ DAILY_MAX_AGE」。
 
 为什么不用文件 mtime 判断：
     CI 每次都是全新 checkout，文件的 mtime 恒等于 checkout 时刻，
@@ -71,6 +76,10 @@ def check(path: str = DEFAULT_PATH) -> int:
     # 反之若报告日期"晚于"今天（时钟回拨/时区异常），age 为负。两者都按过期处理。
     if age < 0:
         print(f"生成时间早于当前时钟异常（{md} {hh}:{mm}，age={age:.0f}s），需要生成")
+        return 1
+
+    if gen.date() != now.date():
+        print(f"不是今天（{now:%m-%d}）生成的（生成于 {md} {hh}:{mm}），需要生成")
         return 1
 
     if age > MAX_AGE_SECONDS:

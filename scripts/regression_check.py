@@ -15,6 +15,7 @@ import compileall
 import importlib
 import io
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -60,10 +61,13 @@ def record(name, ok, detail=""):
 def run_tests():
     print("\n[1/4] 单元测试")
     t0 = time.time()
-    r = subprocess.run(
-        [PY, "-m", "pytest", "-q", "--no-header"],
-        cwd=ROOT, capture_output=True, text=True,
-    )
+    # crawler/CI 用 `uv sync --no-dev`，环境里没有 pytest；有 uv 时临时附加 pytest，
+    # 否则退回当前解释器（审计 4.11）
+    if shutil.which("uv"):
+        cmd = ["uv", "run", "--with", "pytest", "--with", "pytest-timeout", "pytest", "-q", "--no-header"]
+    else:
+        cmd = [PY, "-m", "pytest", "-q", "--no-header"]
+    r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
     tail = (r.stdout or "").strip().splitlines()
     summary = tail[-1] if tail else "(无输出)"
     ok = r.returncode == 0

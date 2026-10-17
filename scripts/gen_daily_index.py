@@ -5,7 +5,6 @@ from datetime import datetime
 
 BASE = Path("docs/reports")
 ARCH = BASE / "archive-daily"
-SITE = "https://leilaomi.github.io/hot-news-radar"
 
 def main():
     if not ARCH.is_dir():
