@@ -454,7 +454,7 @@ def _is_expected_webserver_process(pid: int) -> bool:
     cmdline = _read_proc_cmdline(pid)
     if not cmdline:
         return False
-    return "http.server" in cmdline and str(WEBSERVER_PORT) in cmdline
+    return ("serve_static" in cmdline or "http.server" in cmdline) and str(WEBSERVER_PORT) in cmdline
 
 
 def _terminate_webserver_process(pid: int, require_expected: bool = True) -> bool:
@@ -561,11 +561,11 @@ def start_webserver():
         return
 
     try:
-        # 启动 HTTP 服务器
-        # 使用 --bind 绑定到 0.0.0.0 使容器内部可访问
-        # 工作目录限制在 WEBSERVER_DIR，防止访问其他目录
+        # 启动静态文件服务器（见 serve_static）：
+        # 绑定 0.0.0.0 使容器端口映射可用（compose 默认只映射到宿主 127.0.0.1）；
+        # 不列目录、拒绝 .db 等数据文件，只提供 HTML 报告
         process = subprocess.Popen(
-            [sys.executable, '-m', 'http.server', str(WEBSERVER_PORT), '--bind', '0.0.0.0'],
+            [sys.executable, os.path.abspath(__file__), 'serve_static', str(WEBSERVER_PORT)],
             cwd=WEBSERVER_DIR,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -699,6 +699,65 @@ def show_help():
     print(help_text)
 
 
+# 不对外提供的数据文件（SQLite 数据库、AI 缓存等）
+_BLOCKED_SUFFIXES = (".db", ".db-wal", ".db-shm", ".db-journal", ".sqlite", ".sqlite3", ".pid", ".lock")
+
+
+def serve_static():
+    """在 WEBSERVER_DIR 上提供只读静态文件服务：禁止目录列表，拒绝数据库文件。"""
+    import http.server
+    import functools
+
+    port = int(sys.argv[2]) if len(sys.argv) > 2 else WEBSERVER_PORT
+
+    class _SafeHandler(http.server.SimpleHTTPRequestHandler):
+        def list_directory(self, path):
+            self.send_error(403, "Directory listing is disabled")
+            return None
+
+        def send_head(self):
+            from urllib.parse import unquote
+
+            clean = unquote(self.path.split("?", 1)[0].split("#", 1)[0]).lower().rstrip("/. ")
+            name = clean.rsplit("/", 1)[-1]
+            if clean.endswith(_BLOCKED_SUFFIXES) or name.startswith("."):
+                self.send_error(404, "Not Found")
+                return None
+            return super().send_head()
+
+        def log_message(self, format, *args):  # noqa: A002 - 与父类签名一致
+            pass
+
+    handler = functools.partial(_SafeHandler, directory=WEBSERVER_DIR)
+    with http.server.ThreadingHTTPServer(("0.0.0.0", port), handler) as httpd:
+        httpd.serve_forever()
+
+
+def healthcheck():
+    """容器健康检查：cron 模式要求 supercronic 为 PID 1 且 Web 服务器可访问。"""
+    import urllib.request
+    import urllib.error
+
+    mode = os.environ.get("RUN_MODE", "cron")
+    if mode != "cron":
+        sys.exit(0)
+
+    cmdline = _read_proc_cmdline(1) or ""
+    if "supercronic" not in cmdline:
+        # 启动阶段（IMMEDIATE_RUN 首轮执行中）supercronic 还没接管 PID 1，交给 start-period 容忍
+        print("supercronic 未作为主进程运行")
+        sys.exit(1)
+
+    try:
+        urllib.request.urlopen(f"http://127.0.0.1:{WEBSERVER_PORT}/", timeout=5)
+    except urllib.error.HTTPError:
+        pass  # 403/404 说明服务器在线
+    except Exception as e:
+        print(f"Web 服务器不可用: {e}")
+        sys.exit(1)
+    sys.exit(0)
+
+
 def main():
     if len(sys.argv) < 2:
         show_help()
@@ -715,6 +774,8 @@ def main():
         "start_webserver": start_webserver,
         "stop_webserver": stop_webserver,
         "webserver_status": webserver_status,
+        "serve_static": serve_static,
+        "healthcheck": healthcheck,
         "help": show_help,
     }
 

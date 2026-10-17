@@ -6,7 +6,7 @@
 
 # TrendRadar MCP 工具使用问答
 
-> AI 提问指南 - 如何通过自然对话使用新闻热点分析工具（v3.1.7）
+> AI 提问指南 - 如何通过自然对话使用新闻热点分析工具（MCP Server v4.2.0，共 27 个工具）
 
 ---
 
@@ -38,8 +38,25 @@
 | | `list_available_dates` | 列出本地/远程可用的日期 |
 | **文章** | `read_article` | 读取单篇文章内容（Markdown 格式） |
 | | `read_articles_batch` | 批量读取多篇文章（最多 5 篇） |
-| **通知** | `get_notification_channels` | 获取所有已配置的通知渠道及其状态 |
+| **通知** | `get_channel_format_guide` | 获取各渠道的格式化策略指南（发送前生成最佳排版） |
+| | `get_notification_channels` | 获取所有已配置的通知渠道及其状态 |
 | | `send_notification` | 向已配置的通知渠道发送消息（自动格式转换） |
+
+---
+
+## 🔒 安全说明（HTTP 模式必读）
+
+| 项目 | 默认行为 | 如何调整 |
+|------|---------|---------|
+| **监听地址** | HTTP 模式默认只监听 `127.0.0.1`（仅本机） | `--host 0.0.0.0` 或 `MCP_HOST=0.0.0.0 ./start-http.sh` |
+| **鉴权** | 设置 `MCP_AUTH_TOKEN` 后，所有请求必须带 `Authorization: Bearer <token>`；**监听非本机地址时必须设置，否则服务拒绝启动**（Docker 部署同样必填） | `export MCP_AUTH_TOKEN="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"` |
+| **Host / Origin 校验** | 始终开启，防 DNS rebinding：只接受 `127.0.0.1` / `localhost` / `::1` 及允许列表中的 Host | 通过域名或局域网 IP 访问时设置 `MCP_ALLOWED_HOSTS=mcp.example.com,192.168.1.10`；浏览器来源用 `MCP_ALLOWED_ORIGINS` |
+| **副作用工具** | 默认注册 `send_notification` / `trigger_crawl` / `sync_from_remote` | `MCP_ENABLE_SIDE_EFFECT_TOOLS=false` 不注册这 3 个工具 |
+| **错误信息** | 返回给客户端的错误会自动遮蔽 webhook URL、bot token、密码、S3 密钥 | — |
+| **stdio 模式** | stdout 只输出 JSON-RPC，横幅和日志都在 stderr | — |
+| **第三方服务** | `read_article(s)` 会把文章 URL 发送给 `r.jina.ai` 抓取 | 可选设置 `JINA_API_KEY` 提升限额 |
+
+> 密钥（webhook、token、S3 密钥）请只放在环境变量 / `docker/.env` / GitHub Secrets，不要写进 git 跟踪的 `config/config.yaml`。
 
 ---
 
@@ -580,6 +597,7 @@
 **可以调整：**
 
 - 如果访问 GitHub 较慢，可以说"检查版本更新，使用代理 http://127.0.0.1:10801"
+- 出于安全考虑，代理只允许本机回环地址（127.0.0.1 / localhost / ::1）或 `config.yaml` 中配置的 `advanced.crawler.default_proxy`
 
 ---
 
@@ -590,7 +608,7 @@
 - "请你爬取当前的今日头条的新闻"（临时查询）
 - "帮我抓取一下知乎和微博的最新新闻并保存"（持久化）
 - "触发一次爬取并保存数据"（持久化）
-- "获取 36 氪 的实时数据但不保存"（临时查询）
+- "获取华尔街见闻的实时数据但不保存"（临时查询）
 
 **两种模式：**
 
@@ -763,7 +781,9 @@
 **注意事项：**
 
 - 每次请求间隔 5 秒（内置速率控制）
-- 使用 Jina AI Reader 免费服务（100 RPM 限制）
+- 使用 Jina AI Reader 免费服务（100 RPM 限制），可设置环境变量 `JINA_API_KEY` 提升限额
+- **隐私提示**：文章 URL 会发送给第三方服务 `r.jina.ai`，由其服务器抓取页面
+- 批量读取总耗时上限约 120 秒，超出部分会标记为未读取
 - 部分付费墙/登录墙页面可能无法完整获取
 
 ---

@@ -4,13 +4,19 @@
 实现系统状态查询和爬虫触发功能。
 """
 
+import ipaddress
+import logging
 import os
-from pathlib import Path
 from typing import Dict, List, Optional
+from urllib.parse import urlsplit
 
 from ..services.data_service import DataService
 from ..utils.validators import validate_platforms
 from ..utils.errors import MCPError, CrawlTaskError
+from ..utils.paths import get_data_dir, resolve_project_root
+from ..utils.redact import safe_error
+
+logger = logging.getLogger(__name__)
 
 
 class SystemManagementTools:
@@ -24,12 +30,7 @@ class SystemManagementTools:
             project_root: 项目根目录
         """
         self.data_service = DataService(project_root)
-        if project_root:
-            self.project_root = Path(project_root)
-        else:
-            # 获取项目根目录
-            current_file = Path(__file__)
-            self.project_root = current_file.parent.parent.parent
+        self.project_root = resolve_project_root(project_root)
 
     def get_system_status(self) -> Dict:
         """
@@ -65,7 +66,7 @@ class SystemManagementTools:
                 "success": False,
                 "error": {
                     "code": "INTERNAL_ERROR",
-                    "message": str(e)
+                    "message": safe_error(e)
                 }
             }
 
@@ -141,9 +142,9 @@ class SystemManagementTools:
                     saved_files["html"] = html_path
 
         except Exception as e:
-            print(f"[System] 数据保存失败: {e}")
+            logger.warning("[System] 数据保存失败: %s", e)
             save_success = False
-            save_error_msg = str(e)
+            save_error_msg = safe_error(e)
 
         return save_success, save_error_msg, saved_files
 
@@ -223,7 +224,7 @@ class SystemManagementTools:
             config_data, all_platforms = self._load_crawl_config()
             target_platforms, ids = self._resolve_target_platforms(all_platforms, platforms)
 
-            print(f"开始临时爬取，平台: {[p.get('name', p['id']) for p in target_platforms]}")
+            logger.info("开始临时爬取，平台: %s", [p.get('name', p['id']) for p in target_platforms])
 
             # 2. 执行爬取
             advanced = config_data.get("advanced", {})
@@ -260,7 +261,7 @@ class SystemManagementTools:
             )
 
             storage = LocalStorageBackend(
-                data_dir=str(self.project_root / "output"),
+                data_dir=str(get_data_dir(self.project_root)),
                 enable_txt=True, enable_html=True, timezone=timezone
             )
 
@@ -270,7 +271,7 @@ class SystemManagementTools:
                 )
             finally:
                 get_cache().clear()
-                print("[System] 缓存已清除")
+                logger.info("[System] 缓存已清除")
                 storage.cleanup()
 
             # 4. 构建响应
@@ -287,7 +288,7 @@ class SystemManagementTools:
                 "success": False,
                 "error": {
                     "code": "INTERNAL_ERROR",
-                    "message": str(e),
+                    "message": safe_error(e),
                     "traceback": traceback.format_exc()
                 }
             }
@@ -382,6 +383,28 @@ class SystemManagementTools:
             .replace("'", "&#x27;")
         )
 
+    @staticmethod
+    def _is_allowed_proxy(proxy_url: str, configured_proxy: str = "") -> bool:
+        """proxy_url 白名单：config 中配置的代理，或 http/https/socks 协议的回环地址代理"""
+        proxy_url = (proxy_url or "").strip()
+        if not proxy_url:
+            return False
+        if configured_proxy and proxy_url == configured_proxy:
+            return True
+        try:
+            parts = urlsplit(proxy_url)
+        except ValueError:
+            return False
+        if parts.scheme.lower() not in ("http", "https", "socks5", "socks5h"):
+            return False
+        host = (parts.hostname or "").strip().lower()
+        if host == "localhost":
+            return True
+        try:
+            return ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            return False
+
     def check_version(self, proxy_url: Optional[str] = None) -> Dict:
         """
         检查版本更新
@@ -467,7 +490,7 @@ class SystemManagementTools:
                     "success": False,
                     "name": name,
                     "current_version": local_version,
-                    "error": str(e)
+                    "error": safe_error(e)
                 }
 
         try:
@@ -499,9 +522,21 @@ class SystemManagementTools:
                 "https://raw.githubusercontent.com/LeilaoMi/hot-news-radar/refs/heads/master/version_mcp"
             )
 
-            # 配置代理
+            # 配置代理：只允许本机回环地址的代理，或 config.yaml 中已配置的代理，
+            # 防止调用者借服务器向任意 host:port 发起连接（端口探测 / 泄露出口 IP）
             proxies = None
             if proxy_url:
+                configured_proxy = (
+                    (advanced_config.get("crawler") or {}).get("default_proxy") or ""
+                ).strip()
+                if not self._is_allowed_proxy(proxy_url, configured_proxy):
+                    return {
+                        "success": False,
+                        "error": {
+                            "code": "INVALID_PARAMETER",
+                            "message": "proxy_url 只允许本机回环地址（127.0.0.1 / localhost / ::1）或 config.yaml 中配置的 advanced.crawler.default_proxy",
+                        }
+                    }
                 proxies = {"http": proxy_url, "https": proxy_url}
 
             # 请求头
@@ -543,7 +578,7 @@ class SystemManagementTools:
                 "success": False,
                 "error": {
                     "code": "IMPORT_ERROR",
-                    "message": f"无法导入版本信息: {str(e)}"
+                    "message": f"无法导入版本信息: {safe_error(e)}"
                 }
             }
         except Exception as e:
@@ -551,6 +586,6 @@ class SystemManagementTools:
                 "success": False,
                 "error": {
                     "code": "INTERNAL_ERROR",
-                    "message": str(e)
+                    "message": safe_error(e)
                 }
             }

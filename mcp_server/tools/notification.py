@@ -33,6 +33,7 @@ from trendradar.notification.formatters import strip_markdown
 from trendradar.notification.senders import SMTP_CONFIGS
 
 from ..utils.errors import MCPError, InvalidParameterError
+from ..utils.redact import collect_secrets, redact, redact_obj, safe_error_message
 
 
 # ==================== 渠道启用判断规则 ====================
@@ -226,32 +227,26 @@ def _prepare_batches(message: str, channel_id: str, batch_sizes: Dict = None) ->
 CHANNEL_FORMAT_GUIDES = {
     "feishu": {
         "name": "飞书",
-        "format": "Markdown（卡片消息）",
+        "format": "纯文本消息（msg_type: text，Markdown 符号会被自动剥离）",
         "max_length": "约 29000 字节",
         "supported": [
-            "**粗体**",
-            "[链接文本](URL)",
-            "<font color='red/green/grey/orange/blue'>彩色文本</font>",
-            "---（分割线）",
+            "纯文本",
             "换行分隔段落",
+            "链接以“文本 URL”形式保留（URL 可点击）",
+            "Emoji",
         ],
         "unsupported": [
-            "# 标题语法（不渲染为标题样式）",
-            "> 引用块",
-            "表格 / 图片嵌入",
+            "**粗体** / *斜体*（会被剥离为普通文字）",
+            "<font color> 彩色文本（标签会被剥离）",
+            "# 标题、> 引用、表格、图片",
         ],
         "prompt": (
-            "飞书卡片 Markdown 格式化策略：\n"
-            "1. 用 **粗体** 作小标题和重点词\n"
-            "2. 用 <font color='red'>红色</font> 标记紧急/重要内容\n"
-            "3. 用 <font color='grey'>灰色</font> 标记辅助信息（时间、来源）\n"
-            "4. 用 <font color='orange'>橙色</font> 标记警告\n"
-            "5. 用 <font color='green'>绿色</font> 标记正面/成功信息\n"
-            "6. 用 [文本](URL) 添加可点击链接\n"
-            "7. 用 --- 分割不同主题区域\n"
-            "8. 不要用 # 标题语法（卡片内不渲染）\n"
-            "9. 不要用 > 引用语法\n"
-            "10. 用换行 + 粗体模拟层级结构"
+            "飞书纯文本格式化策略：\n"
+            "1. 不要依赖 Markdown 样式，发送时会被剥离为纯文本\n"
+            "2. 用 Emoji（🔥📈⚠️✅）和【】作为小标题、重点标记\n"
+            "3. 用空行分隔不同主题，用 1. 2. 3. 或 • 组织要点\n"
+            "4. 链接直接写 URL，或写成 [文本](URL)（会转成“文本 URL”）\n"
+            "5. 控制每行长度，手机上更易读"
         ),
     },
     "dingtalk": {
@@ -480,15 +475,14 @@ CHANNEL_FORMAT_GUIDES = {
 # ==================== 渠道 Markdown 适配 ====================
 
 def _adapt_markdown_for_feishu(text: str) -> str:
-    """将通用 Markdown 适配为飞书卡片 Markdown 格式
+    """将通用 Markdown 适配为飞书纯文本消息
 
-    飞书卡片支持：**粗体**, [链接](url), <font color='...'>, ---
-    不支持：# 标题, > 引用块
+    飞书 webhook 这里发送的是 msg_type: "text"（与 trendradar send_to_feishu 一致），
+    不渲染任何 Markdown / <font> 标签，所以统一剥离格式符号，链接保留为“文本 URL”。
     """
-    # 将 # 标题转换为粗体（飞书卡片不渲染标题语法）
-    text = re.sub(r'^#{1,6}\s+(.+)$', r'**\1**', text, flags=re.MULTILINE)
-    # 去除引用语法前缀（飞书不支持）
-    text = re.sub(r'^>\s*', '', text, flags=re.MULTILINE)
+    # 标题：去掉 # 前缀，保留文字
+    text = re.sub(r'^#{1,6}\s+(.+)$', r'\1', text, flags=re.MULTILINE)
+    text = strip_markdown(text)
     # 清理多余空行
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
@@ -683,9 +677,16 @@ def _markdown_to_simple_html(text: str) -> str:
     html = html.replace('&', '&amp;')
     html = html.replace('<', '&lt;')
     html = html.replace('>', '&gt;')
+    html = html.replace('"', '&quot;')
 
-    # 链接
-    html = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2">\1</a>', html)
+    # 链接：只放行 http/https，防止 javascript: 等协议和属性注入
+    def _link(m: "re.Match") -> str:
+        label, url = m.group(1), m.group(2).strip()
+        if re.match(r'(?i)^https?://', url) and not re.search(r'\s', url):
+            return f'<a href="{url}">{label}</a>'
+        return label
+
+    html = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', _link, html)
 
     # 标题 ### → <h3>
     html = re.sub(r'^### (.+)$', r'<h3>\1</h3>', html, flags=re.MULTILINE)
@@ -740,7 +741,7 @@ def _send_feishu(webhook_url: str, content: str, title: str) -> Dict:
             detail = data.get("msg") or data.get("StatusMessage", "")
         return {"success": ok, "detail": detail}
     except Exception as e:
-        return {"success": False, "detail": str(e)}
+        return {"success": False, "detail": safe_error_message(e)}
 
 
 def _send_dingtalk(webhook_url: str, content: str, title: str) -> Dict:
@@ -755,7 +756,7 @@ def _send_dingtalk(webhook_url: str, content: str, title: str) -> Dict:
         ok = resp.status_code == 200 and data.get("errcode") == 0
         return {"success": ok, "detail": data.get("errmsg", "") if not ok else ""}
     except Exception as e:
-        return {"success": False, "detail": str(e)}
+        return {"success": False, "detail": safe_error_message(e)}
 
 
 def _send_wework(webhook_url: str, content: str, title: str, msg_type: str = "markdown") -> Dict:
@@ -771,7 +772,7 @@ def _send_wework(webhook_url: str, content: str, title: str, msg_type: str = "ma
         ok = resp.status_code == 200 and data.get("errcode") == 0
         return {"success": ok, "detail": data.get("errmsg", "") if not ok else ""}
     except Exception as e:
-        return {"success": False, "detail": str(e)}
+        return {"success": False, "detail": safe_error_message(e)}
 
 
 def _send_telegram(bot_token: str, chat_id: str, content: str, title: str) -> Dict:
@@ -789,7 +790,7 @@ def _send_telegram(bot_token: str, chat_id: str, content: str, title: str) -> Di
         ok = resp.status_code == 200 and data.get("ok")
         return {"success": ok, "detail": data.get("description", "") if not ok else ""}
     except Exception as e:
-        return {"success": False, "detail": str(e)}
+        return {"success": False, "detail": safe_error_message(e)}
 
 
 def _send_email(
@@ -849,7 +850,7 @@ def _send_email(
 
         return {"success": True, "detail": ""}
     except Exception as e:
-        return {"success": False, "detail": str(e)}
+        return {"success": False, "detail": safe_error_message(e)}
 
 
 def _send_ntfy(server_url: str, topic: str, content: str, title: str, token: str = "") -> Dict:
@@ -888,7 +889,7 @@ def _send_ntfy(server_url: str, topic: str, content: str, title: str, token: str
         else:
             return {"success": False, "detail": f"status={resp.status_code}"}
     except Exception as e:
-        return {"success": False, "detail": str(e)}
+        return {"success": False, "detail": safe_error_message(e)}
 
 
 def _send_bark(bark_url: str, content: str, title: str) -> Dict:
@@ -896,7 +897,7 @@ def _send_bark(bark_url: str, content: str, title: str) -> Dict:
     parsed = urlparse(bark_url)
     device_key = parsed.path.strip('/').split('/')[0] if parsed.path else None
     if not device_key:
-        return {"success": False, "detail": f"无法从 URL 提取 device_key: {bark_url}"}
+        return {"success": False, "detail": "无法从 BARK_URL 提取 device_key（请检查 URL 格式：服务器地址/<device_key>）"}
 
     api_endpoint = f"{parsed.scheme}://{parsed.netloc}/push"
     payload = {
@@ -914,7 +915,7 @@ def _send_bark(bark_url: str, content: str, title: str) -> Dict:
         ok = resp.status_code == 200 and data.get("code") == 200
         return {"success": ok, "detail": data.get("message", "") if not ok else ""}
     except Exception as e:
-        return {"success": False, "detail": str(e)}
+        return {"success": False, "detail": safe_error_message(e)}
 
 
 def _send_slack(webhook_url: str, content: str, title: str) -> Dict:
@@ -926,7 +927,7 @@ def _send_slack(webhook_url: str, content: str, title: str) -> Dict:
         ok = resp.status_code == 200 and resp.text == "ok"
         return {"success": ok, "detail": "" if ok else resp.text}
     except Exception as e:
-        return {"success": False, "detail": str(e)}
+        return {"success": False, "detail": safe_error_message(e)}
 
 
 def _send_generic_webhook(
@@ -954,7 +955,7 @@ def _send_generic_webhook(
         ok = 200 <= resp.status_code < 300
         return {"success": ok, "detail": "" if ok else f"status={resp.status_code}"}
     except Exception as e:
-        return {"success": False, "detail": str(e)}
+        return {"success": False, "detail": safe_error_message(e)}
 
 
 # ==================== 工具类 ====================
@@ -1101,7 +1102,7 @@ class NotificationTools:
         except Exception as e:
             return {
                 "success": False,
-                "error": {"code": "INTERNAL_ERROR", "message": str(e)},
+                "error": {"code": "INTERNAL_ERROR", "message": redact(safe_error_message(e), collect_secrets())},
             }
 
     def send_notification(
@@ -1181,6 +1182,10 @@ class NotificationTools:
             success_count = sum(1 for r in results.values() if r["success"])
             total = len(results)
 
+            # 返回给 MCP 客户端前脱敏：异常信息里可能带完整 webhook URL / bot token
+            secrets = collect_secrets(config)
+            results = {ch_id: redact_obj(r, secrets) for ch_id, r in results.items()}
+
             return {
                 "success": success_count > 0,
                 "summary": f"{success_count}/{total} 个渠道发送成功",
@@ -1194,11 +1199,11 @@ class NotificationTools:
             }
 
         except MCPError as e:
-            return {"success": False, "error": e.to_dict()}
+            return {"success": False, "error": redact_obj(e.to_dict(), collect_secrets())}
         except Exception as e:
             return {
                 "success": False,
-                "error": {"code": "INTERNAL_ERROR", "message": str(e)},
+                "error": {"code": "INTERNAL_ERROR", "message": redact(safe_error_message(e), collect_secrets())},
             }
 
     def _dispatch_to_channel(

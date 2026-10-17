@@ -1,10 +1,49 @@
+# 本文件只做本地构建（等价于 docker-compose.yml 的默认行为），保留以兼容旧文档。
+# 用法：cd docker && cp .env.example .env && docker compose -f docker-compose-build.yml up -d --build
+
+# 两个服务共用的通知 / 远程存储环境变量（从 docker/.env 读取）
+x-common-env: &common-env
+  # 通知渠道
+  FEISHU_WEBHOOK_URL: ${FEISHU_WEBHOOK_URL:-}
+  TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+  TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+  DINGTALK_WEBHOOK_URL: ${DINGTALK_WEBHOOK_URL:-}
+  WEWORK_WEBHOOK_URL: ${WEWORK_WEBHOOK_URL:-}
+  WEWORK_MSG_TYPE: ${WEWORK_MSG_TYPE:-}
+  # 邮件配置
+  EMAIL_FROM: ${EMAIL_FROM:-}
+  EMAIL_PASSWORD: ${EMAIL_PASSWORD:-}
+  EMAIL_TO: ${EMAIL_TO:-}
+  EMAIL_SMTP_SERVER: ${EMAIL_SMTP_SERVER:-}
+  EMAIL_SMTP_PORT: ${EMAIL_SMTP_PORT:-}
+  # ntfy配置
+  NTFY_SERVER_URL: ${NTFY_SERVER_URL:-https://ntfy.sh}
+  NTFY_TOPIC: ${NTFY_TOPIC:-}
+  NTFY_TOKEN: ${NTFY_TOKEN:-}
+  # Bark配置
+  BARK_URL: ${BARK_URL:-}
+  # Slack配置
+  SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+  # 通用Webhook配置
+  GENERIC_WEBHOOK_URL: ${GENERIC_WEBHOOK_URL:-}
+  GENERIC_WEBHOOK_TEMPLATE: ${GENERIC_WEBHOOK_TEMPLATE:-}
+  # 远程存储配置（S3 兼容协议）
+  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
+  S3_BUCKET_NAME: ${S3_BUCKET_NAME:-}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+  S3_REGION: ${S3_REGION:-}
+
 services:
   trendradar:
     build:
       context: ..
       dockerfile: docker/Dockerfile
     container_name: trendradar
-    restart: unless-stopped
+    # cron 模式常驻，默认 unless-stopped；
+    # RUN_MODE=once 时请在 docker/.env 设置 TRENDRADAR_RESTART=no（或 on-failure），
+    # 否则容器退出后会被重新拉起（entrypoint 已做防重复执行保护，重启后只会空闲等待）
+    restart: ${TRENDRADAR_RESTART:-unless-stopped}
 
     ports:
       - "127.0.0.1:${WEBSERVER_PORT:-8080}:${WEBSERVER_PORT:-8080}"
@@ -14,48 +53,19 @@ services:
       - ../output:/app/output
 
     environment:
-      - TZ=Asia/Shanghai
+      <<: *common-env
+      TZ: Asia/Shanghai
       # Web 服务器
-      - WEBSERVER_PORT=${WEBSERVER_PORT:-8080}
-      # 通知渠道
-      - FEISHU_WEBHOOK_URL=${FEISHU_WEBHOOK_URL:-}
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
-      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
-      - DINGTALK_WEBHOOK_URL=${DINGTALK_WEBHOOK_URL:-}
-      - WEWORK_WEBHOOK_URL=${WEWORK_WEBHOOK_URL:-}
-      - WEWORK_MSG_TYPE=${WEWORK_MSG_TYPE:-}
-      # 邮件配置
-      - EMAIL_FROM=${EMAIL_FROM:-}
-      - EMAIL_PASSWORD=${EMAIL_PASSWORD:-}
-      - EMAIL_TO=${EMAIL_TO:-}
-      - EMAIL_SMTP_SERVER=${EMAIL_SMTP_SERVER:-}
-      - EMAIL_SMTP_PORT=${EMAIL_SMTP_PORT:-}
-      # ntfy配置
-      - NTFY_SERVER_URL=${NTFY_SERVER_URL:-https://ntfy.sh}
-      - NTFY_TOPIC=${NTFY_TOPIC:-}
-      - NTFY_TOKEN=${NTFY_TOKEN:-}
-      # Bark配置
-      - BARK_URL=${BARK_URL:-}
-      # Slack配置
-      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
-      # 通用Webhook配置
-      - GENERIC_WEBHOOK_URL=${GENERIC_WEBHOOK_URL:-}
-      - GENERIC_WEBHOOK_TEMPLATE=${GENERIC_WEBHOOK_TEMPLATE:-}
+      WEBSERVER_PORT: ${WEBSERVER_PORT:-8080}
       # AI 配置（ai_analysis 和 ai_translation 共享模型配置）
-      - AI_ANALYSIS_ENABLED=${AI_ANALYSIS_ENABLED:-}
-      - AI_API_KEY=${AI_API_KEY:-}
-      - AI_MODEL=${AI_MODEL:-}
-      - AI_API_BASE=${AI_API_BASE:-}
-      # 远程存储配置（S3 兼容协议）
-      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-}
-      - S3_BUCKET_NAME=${S3_BUCKET_NAME:-}
-      - S3_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID:-}
-      - S3_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY:-}
-      - S3_REGION=${S3_REGION:-}
+      AI_ANALYSIS_ENABLED: ${AI_ANALYSIS_ENABLED:-}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-}
+      AI_API_BASE: ${AI_API_BASE:-}
       # 运行模式
-      - CRON_SCHEDULE=${CRON_SCHEDULE:-*/30 * * * *}
-      - RUN_MODE=${RUN_MODE:-cron}
-      - IMMEDIATE_RUN=${IMMEDIATE_RUN:-true}
+      CRON_SCHEDULE: ${CRON_SCHEDULE:-*/30 * * * *}
+      RUN_MODE: ${RUN_MODE:-cron}
+      IMMEDIATE_RUN: ${IMMEDIATE_RUN:-true}
 
   trendradar-mcp:
     build:
@@ -64,6 +74,8 @@ services:
     container_name: trendradar-mcp
     restart: unless-stopped
 
+    # 宿主机端口 = MCP_PORT（默认 3333），容器内固定监听 3333；
+    # 默认只绑定宿主 127.0.0.1，改 MCP_HOST=0.0.0.0 对外开放前务必设置强随机 MCP_AUTH_TOKEN
     ports:
       - "${MCP_HOST:-127.0.0.1}:${MCP_PORT:-3333}:3333"
 
@@ -72,5 +84,14 @@ services:
       - ../output:/app/output
 
     environment:
-      - TZ=Asia/Shanghai
-      - MCP_PORT=${MCP_PORT:-3333}
+      <<: *common-env
+      TZ: Asia/Shanghai
+      # 必填：容器内监听 0.0.0.0，未设置 token 时 MCP 服务会拒绝启动。
+      # 客户端请求头：Authorization: Bearer <MCP_AUTH_TOKEN>
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-}
+      # 通过域名 / 局域网 IP 访问时，把对应 Host 加进来（逗号分隔），否则会被 DNS rebinding 防护拒绝（421）
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-}
+      MCP_ALLOWED_ORIGINS: ${MCP_ALLOWED_ORIGINS:-}
+      # 设为 false 可禁用 send_notification / trigger_crawl / sync_from_remote
+      MCP_ENABLE_SIDE_EFFECT_TOOLS: ${MCP_ENABLE_SIDE_EFFECT_TOOLS:-true}
+      JINA_API_KEY: ${JINA_API_KEY:-}
