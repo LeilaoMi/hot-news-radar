@@ -13,11 +13,12 @@ import json
 import random
 import time
 from typing import Dict, List, Tuple, Optional, Union
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 import requests
 
 from trendradar.core.logger import get_logger
+from trendradar.utils.url import sanitize_url
 
 log = get_logger(__name__)
 
@@ -37,10 +38,14 @@ class DataFetcher:
         "Cache-Control": "no-cache",
     }
 
+    # newsnow 返回 status=cache 时，updatedTime 超过该时长视为过期数据（秒）
+    DEFAULT_MAX_CACHE_AGE = 2 * 3600
+
     def __init__(
         self,
         proxy_url: Optional[str] = None,
         api_url: Optional[str] = None,
+        max_cache_age: Optional[int] = None,
     ):
         """
         初始化数据获取器
@@ -48,9 +53,42 @@ class DataFetcher:
         Args:
             proxy_url: 代理服务器 URL（可选）
             api_url: API 基础 URL（可选，默认使用 DEFAULT_API_URL）
+            max_cache_age: 缓存数据最大可接受年龄（秒），0 关闭检查，None 使用默认 2 小时
         """
         self.proxy_url = proxy_url
         self.api_url = api_url or self.DEFAULT_API_URL
+        self.max_cache_age = self.DEFAULT_MAX_CACHE_AGE if max_cache_age is None else max_cache_age
+        # 本轮因「缓存过期 / 空数据」被判失败的平台及原因，供日志与报告使用
+        self.failure_reasons: Dict[str, str] = {}
+        if urlparse(self.api_url).scheme == "http":
+            log.warning(
+                f"⚠️ 热榜 API 使用明文 http（{self.api_url}），数据可被中间人篡改；"
+                "建议改为 https（expected_domain 只校验条目链接，不保护 API 本身）"
+            )
+
+    def _build_api_url(self, id_value: str) -> str:
+        """构造请求地址：兼容 api_url 自带查询参数的情况（不再用字符串硬拼 ?id=）。"""
+        sep = "&" if "?" in self.api_url else "?"
+        return f"{self.api_url}{sep}{urlencode({'id': id_value})}&latest"
+
+    def _check_freshness(self, data_json: Dict, now_ts: Optional[float] = None) -> Optional[str]:
+        """status=cache 时校验 updatedTime；返回 None 表示可接受，否则返回原因。"""
+        if not self.max_cache_age or data_json.get("status") != "cache":
+            return None
+        updated = data_json.get("updatedTime")
+        if updated in (None, ""):
+            return None
+        try:
+            updated = float(updated)
+        except (TypeError, ValueError):
+            return None
+        if updated > 1e12:  # 毫秒时间戳
+            updated /= 1000.0
+        now_ts = time.time() if now_ts is None else now_ts
+        age = now_ts - updated
+        if age > self.max_cache_age:
+            return f"缓存数据已过期 {age / 3600:.1f} 小时（阈值 {self.max_cache_age / 3600:.1f} 小时）"
+        return None
 
     @staticmethod
     def _check_domain_safety(
@@ -112,7 +150,7 @@ class DataFetcher:
             id_value = id_info
             alias = id_value
 
-        url = f"{self.api_url}?id={id_value}&latest"
+        url = self._build_api_url(id_value)
 
         proxies = None
         if self.proxy_url:
@@ -135,6 +173,13 @@ class DataFetcher:
                 status = data_json.get("status", "未知")
                 if status not in ["success", "cache"]:
                     raise ValueError(f"响应状态异常: {status}")
+
+                stale_reason = self._check_freshness(data_json)
+                if stale_reason:
+                    # 过期缓存重试也拿不到新数据，直接判失败，避免把旧榜单当作当前榜单
+                    log.warning(f"请求 {id_value} 返回过期缓存: {stale_reason}")
+                    self.failure_reasons[id_value] = stale_reason
+                    return None, id_value, alias
 
                 status_info = "最新数据" if status == "success" else "缓存数据"
                 log.info(f"获取 {id_value} 成功（{status_info}）")
@@ -175,6 +220,7 @@ class DataFetcher:
         id_to_name = {}
         failed_ids = []
         domain_rules = domain_rules or {}
+        self.failure_reasons = {}
 
         for i, id_info in enumerate(ids_list):
             if isinstance(id_info, tuple):
@@ -204,6 +250,12 @@ class DataFetcher:
                             failed_ids.append(id_value)
                             continue
 
+                    if not items:
+                        log.warning(f"{name}({id_value}) 返回空列表，计为失败")
+                        self.failure_reasons[id_value] = "返回空数据"
+                        failed_ids.append(id_value)
+                        continue
+
                     results[id_value] = {}
 
                     for index, item in enumerate(items, 1):
@@ -212,8 +264,9 @@ class DataFetcher:
                         if title is None or isinstance(title, float) or not str(title).strip():
                             continue
                         title = str(title).strip()
-                        url = item.get("url", "")
-                        mobile_url = item.get("mobileUrl", "")
+                        # 协议白名单：未配置 expected_domain 的平台也不允许 javascript:/data: 链接入库
+                        url = sanitize_url(item.get("url", "") or "")
+                        mobile_url = sanitize_url(item.get("mobileUrl", "") or "")
 
                         if title in results[id_value]:
                             results[id_value][title]["ranks"].append(index)

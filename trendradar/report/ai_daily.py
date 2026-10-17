@@ -18,6 +18,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from trendradar.report.helpers import REPORT_CSP_META
+
 from trendradar.core.logger import get_logger
 
 log = get_logger(__name__)
@@ -85,7 +87,7 @@ def _summary_chips(stats: List[Dict]) -> List[str]:
         word = str(s.get("word", "") or "").strip()
         if not word:
             continue
-        chips.append(f"{html.escape(word)} · {s.get('count', 0)}条")
+        chips.append(f"{html.escape(word)} · {html.escape(str(s.get('count', 0)))}条")
     return chips
 
 
@@ -132,6 +134,7 @@ def render_ai_daily_html(
 
     return (
         '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">'
+        + REPORT_CSP_META +
         '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
         f'<title>AI 热点日报 · {date_str}</title>'
         f'<style>{_PAGE_CSS}</style></head><body>'

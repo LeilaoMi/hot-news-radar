@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from email.utils import parsedate_to_datetime
+from trendradar.utils.url import sanitize_url
 
 try:
     import feedparser
@@ -58,12 +59,24 @@ class RSSParser:
         Returns:
             解析后的条目列表
         """
-        # 先尝试检测 JSON Feed
-        if self._is_json_feed(content):
-            return self._parse_json_feed(content, feed_url)
+        # 支持直接传入 bytes：交给 feedparser 按 XML 声明 / BOM 自行解码，
+        # 避免服务器未声明 charset 时 requests 猜错编码导致乱码
+        if isinstance(content, (bytes, bytearray)):
+            raw_bytes = bytes(content)
+            try:
+                text = raw_bytes.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                text = None
+            if text is not None and self._is_json_feed(text):
+                return self._parse_json_feed(text, feed_url)
+            feed = feedparser.parse(raw_bytes)
+        else:
+            # 先尝试检测 JSON Feed
+            if self._is_json_feed(content):
+                return self._parse_json_feed(content, feed_url)
 
-        # 使用 feedparser 解析 RSS/Atom
-        feed = feedparser.parse(content)
+            # 使用 feedparser 解析 RSS/Atom
+            feed = feedparser.parse(content)
 
         if feed.bozo and not feed.entries:
             raise ValueError(f"RSS 解析失败 ({feed_url}): {feed.bozo_exception}")
@@ -125,7 +138,7 @@ class RSSParser:
 
     def _parse_json_feed_item(self, item_data: Dict[str, Any]) -> Optional[ParsedRSSItem]:
         """解析单个 JSON Feed 条目"""
-        url = item_data.get("url", "") or item_data.get("external_url", "")
+        url = sanitize_url(item_data.get("url", "")) or sanitize_url(item_data.get("external_url", ""))
 
         title = item_data.get("title", "")
         if not title:
@@ -211,21 +224,37 @@ class RSSParser:
         })
         response.raise_for_status()
 
-        return self.parse(response.text, url)
+        return self.parse(response.content, url)
+
+    @staticmethod
+    def _pick_entry_url(entry: Any) -> str:
+        """选取条目链接，只接受 http/https（协议白名单，入库前过滤，保护网页与所有推送渠道）。
+
+        优先级：link → rel=alternate / text/html 的 links → 其余 links。
+        候选全部不安全时返回空串（标题仍保留，展示为纯文本）。
+        """
+        candidates = []
+        link = entry.get("link", "")
+        if link:
+            candidates.append(link)
+        links = entry.get("links", []) or []
+        preferred = [
+            lk.get("href", "") for lk in links
+            if lk.get("rel") == "alternate" or (lk.get("type") or "").startswith("text/html")
+        ]
+        candidates.extend(preferred)
+        candidates.extend(lk.get("href", "") for lk in links)
+        for cand in candidates:
+            safe = sanitize_url(cand)
+            if safe:
+                return safe
+        return ""
 
     def _parse_entry(self, entry: Any) -> Optional[ParsedRSSItem]:
         """解析单个条目"""
         title = self._clean_text(entry.get("title", ""))
 
-        url = entry.get("link", "")
-        if not url:
-            links = entry.get("links", [])
-            for link in links:
-                if link.get("rel") == "alternate" or link.get("type", "").startswith("text/html"):
-                    url = link.get("href", "")
-                    break
-            if not url and links:
-                url = links[0].get("href", "")
+        url = self._pick_entry_url(entry)
 
         if not title:
             raw_summary = entry.get("summary") or entry.get("description", "")

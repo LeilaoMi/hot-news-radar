@@ -10,6 +10,7 @@ BASE_HEAD_HTML = """
     <html>
     <head>
         <meta charset="UTF-8">
+        <meta http-equiv="Content-Security-Policy" content="__REPORT_CSP__">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>热点新闻分析</title>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" integrity="sha512-BNaRQnYJYiPSqHHDb58B0yaPfCu+Wgds8Gp/gU33kqBtgNS4tSPHuGibyoeqMV/TJlSKda6FXzoEyYGjTe+vXA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
@@ -1391,3 +1392,9 @@ BASE_HEAD_HTML = """
                 </div>
                 <div class="header-title">热点新闻分析</div>
                 <div class="header-info">"""
+
+
+# CSP 统一定义在 helpers.REPORT_CSP，这里替换占位符，避免两处各写一份
+from trendradar.report.helpers import REPORT_CSP as _REPORT_CSP  # noqa: E402
+
+BASE_HEAD_HTML = BASE_HEAD_HTML.replace("__REPORT_CSP__", _REPORT_CSP)

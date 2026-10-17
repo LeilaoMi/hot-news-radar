@@ -31,8 +31,6 @@ from trendradar.report import (
     render_html_content,
 )
 from trendradar.notification import (
-    render_feishu_content,
-    render_dingtalk_content,
     split_content_into_batches,
     NotificationDispatcher,
 )
@@ -85,7 +83,7 @@ class AppContext:
     @property
     def rank_threshold(self) -> int:
         """获取排名阈值"""
-        return self.config.get("RANK_THRESHOLD", 50)
+        return self.config.get("RANK_THRESHOLD", 10)  # 与 loader 默认值一致
 
     @property
     def weight_config(self) -> Dict:
@@ -292,7 +290,10 @@ class AppContext:
         mode: str = "daily",
         frequency_file: Optional[str] = None,
     ) -> Dict:
-        """准备报告数据"""
+        """准备报告数据
+
+        frequency_file 参数无效（统计结果 stats 已按频率词过滤），仅为兼容旧调用保留。
+        """
         return prepare_report_data(
             stats=stats,
             failed_ids=failed_ids,
@@ -319,8 +320,10 @@ class AppContext:
         frequency_file: Optional[str] = None,
         report_metadata: Optional[Dict] = None,
         translate_report_func: Optional[Any] = None,
+        write_snapshot: bool = True,
+        write_index: bool = True,
     ) -> str:
-        """生成HTML报告"""
+        """生成HTML报告（write_snapshot/write_index=False 用于 RENDER_ONLY：只更新 latest/{mode}.html）"""
         return generate_html_report(
             stats=stats,
             total_titles=total_titles,
@@ -336,6 +339,8 @@ class AppContext:
             render_html_func=lambda *args, **kwargs: self.render_html(*args, rss_items=rss_items, rss_new_items=rss_new_items, ai_analysis=ai_analysis, standalone_data=standalone_data, **kwargs),
             report_metadata=report_metadata,
             translate_report_func=translate_report_func,
+            write_snapshot=write_snapshot,
+            write_index=write_index,
         )
 
     def render_html(
@@ -363,42 +368,11 @@ class AppContext:
             ai_analysis=ai_analysis,
             show_new_section=self.show_new_section,
             standalone_data=standalone_data,
+            rank_threshold=self.rank_threshold,
         )
 
     # === 通知内容渲染 ===
-
-    def render_feishu(
-        self,
-        report_data: Dict,
-        update_info: Optional[Dict] = None,
-        mode: str = "daily",
-    ) -> str:
-        """渲染飞书内容"""
-        return render_feishu_content(
-            report_data=report_data,
-            update_info=update_info,
-            mode=mode,
-            separator=self.config.get("FEISHU_MESSAGE_SEPARATOR", "---"),
-            region_order=self.region_order,
-            get_time_func=self.get_time,
-            show_new_section=self.show_new_section,
-        )
-
-    def render_dingtalk(
-        self,
-        report_data: Dict,
-        update_info: Optional[Dict] = None,
-        mode: str = "daily",
-    ) -> str:
-        """渲染钉钉内容"""
-        return render_dingtalk_content(
-            report_data=report_data,
-            update_info=update_info,
-            mode=mode,
-            region_order=self.region_order,
-            get_time_func=self.get_time,
-            show_new_section=self.show_new_section,
-        )
+    # （render_feishu / render_dingtalk 无调用方且依赖已废弃的 notification/renderer，已删除）
 
     def split_content(
         self,

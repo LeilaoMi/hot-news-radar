@@ -7,8 +7,28 @@
 - generate_html_report: 生成 HTML 报告
 """
 
+import html as _html
+import os
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Callable
+
+
+def _atomic_write_text(path, content: str) -> None:
+    """原子写：先写同目录临时文件再 os.replace，进程中途被杀也不会留下半截页面。"""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def prepare_report_data(
@@ -17,7 +37,7 @@ def prepare_report_data(
     new_titles: Optional[Dict] = None,
     id_to_name: Optional[Dict] = None,
     mode: str = "daily",
-    rank_threshold: int = 3,
+    rank_threshold: int = 10,
     show_new_section: bool = True,
 ) -> Dict:
     """
@@ -147,13 +167,15 @@ def generate_html_report(
     id_to_name: Optional[Dict] = None,
     mode: str = "daily",
     update_info: Optional[Dict] = None,
-    rank_threshold: int = 3,
+    rank_threshold: int = 10,
     output_dir: str = "output",
     date_folder: str = "",
     time_filename: str = "",
     render_html_func: Optional[Callable] = None,
     report_metadata: Optional[Dict] = None,
     translate_report_func: Optional[Callable] = None,
+    write_snapshot: bool = True,
+    write_index: bool = True,
 ) -> str:
     """
     生成 HTML 报告
@@ -176,16 +198,19 @@ def generate_html_report(
         date_folder: 日期文件夹名称
         time_filename: 时间文件名
         render_html_func: HTML 渲染函数
+        write_snapshot: 是否写时间戳快照（RENDER_ONLY 只重渲染，不产生新的「抓取快照」）
+        write_index: 是否覆盖 output/index.html 与根 index.html
 
     Returns:
-        str: 生成的 HTML 文件路径（时间戳快照路径）
+        str: 生成的 HTML 文件路径（写快照时为快照路径，否则为 latest/{mode}.html）
     """
     # 时间戳快照文件名
     snapshot_filename = f"{time_filename}.html"
 
     # 构建输出路径（扁平化结构：output/html/日期/）
     snapshot_path = Path(output_dir) / "html" / date_folder
-    snapshot_path.mkdir(parents=True, exist_ok=True)
+    if write_snapshot:
+        snapshot_path.mkdir(parents=True, exist_ok=True)
     snapshot_file = str(snapshot_path / snapshot_filename)
 
     # 准备报告数据
@@ -218,29 +243,26 @@ def generate_html_report(
             report_data, total_titles, mode, update_info
         )
     else:
-        # 默认简单 HTML
-        html_content = f"<html><body><h1>Report</h1><pre>{report_data}</pre></body></html>"
+        # 默认简单 HTML（转义，避免数据中的标签被解释）
+        html_content = (
+            "<html><body><h1>Report</h1><pre>"
+            f"{_html.escape(repr(report_data))}</pre></body></html>"
+        )
 
     # 1. 保存时间戳快照（历史记录）
-    with open(snapshot_file, "w", encoding="utf-8") as f:
-        f.write(html_content)
+    if write_snapshot:
+        _atomic_write_text(snapshot_file, html_content)
 
     # 2. 复制到 html/latest/{mode}.html（最新报告）
     latest_dir = Path(output_dir) / "html" / "latest"
-    latest_dir.mkdir(parents=True, exist_ok=True)
     latest_file = latest_dir / f"{mode}.html"
-    with open(latest_file, "w", encoding="utf-8") as f:
-        f.write(html_content)
+    _atomic_write_text(latest_file, html_content)
 
-    # 3. 复制到 index.html（入口）
-    # output/index.html（供 Docker Volume 挂载访问）
-    output_index = Path(output_dir) / "index.html"
-    with open(output_index, "w", encoding="utf-8") as f:
-        f.write(html_content)
+    if write_index:
+        # 3. 复制到 index.html（入口）
+        # output/index.html（供 Docker Volume 挂载访问）
+        _atomic_write_text(Path(output_dir) / "index.html", html_content)
+        # 根目录 index.html（供 GitHub Pages 访问）
+        _atomic_write_text(Path("index.html"), html_content)
 
-    # 根目录 index.html（供 GitHub Pages 访问）
-    root_index = Path("index.html")
-    with open(root_index, "w", encoding="utf-8") as f:
-        f.write(html_content)
-
-    return snapshot_file
+    return snapshot_file if write_snapshot else str(latest_file)

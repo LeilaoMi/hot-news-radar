@@ -129,9 +129,14 @@ def _check_with_config(results: List[Tuple[str, str, str]], config: Dict) -> Non
     # 4) 调度配置检查
     try:
         ctx = AppContext(config)
-        schedule = ctx.create_scheduler().resolve()
-        detail = f"调度解析成功（report_mode={schedule.report_mode}, ai_mode={schedule.ai_mode}）"
-        _record_result(results, "pass", "调度配置", detail)
+        try:
+            schedule = ctx.create_scheduler().resolve()
+            detail = f"调度解析成功（report_mode={schedule.report_mode}, ai_mode={schedule.ai_mode}）"
+            if schedule.ai_mode_explicit:
+                detail += "；timeline 的 ai_mode 将覆盖全局 ai_analysis.mode"
+            _record_result(results, "pass", "调度配置", detail)
+        finally:
+            ctx.cleanup()
     except Exception as e:
         _record_result(results, "fail", "调度配置", f"解析失败: {e}")
 
@@ -172,11 +177,20 @@ def _check_with_config(results: List[Tuple[str, str, str]], config: Dict) -> Non
                 results, "fail", "存储配置",
                 f"remote 模式缺少配置: {', '.join(missing_remote_keys)}"
             )
-        elif backend == "auto" and os.environ.get("GITHUB_ACTIONS") == "true" and missing_remote_keys:
-            _record_result(
-                results, "warn", "存储配置",
-                "GitHub Actions + auto 模式未完整配置远程存储，可能导致数据丢失"
-            )
+        elif backend in ("auto", "local") and os.environ.get("GITHUB_ACTIONS") == "true" and missing_remote_keys:
+            data_dir = Path(storage_cfg.get("LOCAL", {}).get("DATA_DIR", "output")) / "news"
+            persisted = data_dir.is_dir() and any(data_dir.glob("*.db"))
+            if persisted:
+                _record_result(
+                    results, "pass", "存储配置",
+                    f"GitHub Actions + 本地存储，已发现持久化数据库（{data_dir}，例如由 actions/cache 恢复）"
+                )
+            else:
+                _record_result(
+                    results, "warn", "存储配置",
+                    "GitHub Actions + 本地存储且未发现持久化数据库：once 防重推 / 全天汇总 / 新增检测"
+                    "每次都从空库开始。请用 actions/cache 恢复 output/ 或配置 S3/R2"
+                )
         else:
             sm = AppContext(config).get_storage_manager()
             _record_result(results, "pass", "存储配置", f"当前后端: {sm.backend_name}")

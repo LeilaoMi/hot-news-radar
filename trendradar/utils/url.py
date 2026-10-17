@@ -126,3 +126,70 @@ def normalize_url(url: str, platform_id: str = "") -> str:
     except Exception:
         # 解析失败时返回原始 URL
         return url
+
+
+# ---------------------------------------------------------------------------
+# 链接安全：协议白名单
+# ---------------------------------------------------------------------------
+
+# 允许出现在 href/src 中的协议。RSS / 热榜数据来自外部，其它任何协议
+# （javascript: / data: / vbscript: / file: …）都可能在公开页面上执行脚本或钓鱼。
+SAFE_URL_SCHEMES = frozenset({"http", "https"})
+
+
+def _strip_controls(value: str) -> str:
+    """删除 C0 控制字符、DEL 与所有空白（浏览器解析 scheme 时会忽略 \\t \\n \\r）。"""
+    return "".join(ch for ch in value if ord(ch) > 0x20 and ord(ch) != 0x7F)
+
+
+def _scheme_verdict(probe: str) -> bool:
+    """probe 已去控制字符；返回该串的协议是否被允许。"""
+    if not probe:
+        return False
+    if probe.startswith("//"):
+        return True  # 协议相对地址，继承页面协议（https）
+    colon = probe.find(":")
+    if colon <= 0:
+        return False  # 相对路径 / 畸形
+    scheme = probe[:colon]
+    if not all(c.isascii() and (c.isalnum() or c in "+-.") for c in scheme):
+        return False
+    return scheme.lower() in SAFE_URL_SCHEMES
+
+
+def sanitize_url(url) -> str:
+    """校验外部链接：只放行 http/https 绝对地址（以及协议相对的 //host/...）。
+
+    同时检查「原文」与「HTML 实体解码后」两种形态（防 ``javascript&colon;``、
+    ``&#106;avascript:``、``java\\tscript:``、大小写混写、前导空白等混淆），
+    两者都必须是 http/https 才放行。
+
+    Returns:
+        通过时返回去掉首尾空白与控制字符的原文 URL；否则返回空串。
+        调用方写入 HTML 属性前仍须做 HTML 转义。
+    """
+    import html as _html
+
+    if not isinstance(url, str):
+        return ""
+    raw = "".join(ch for ch in url.strip() if ord(ch) >= 0x20 and ord(ch) != 0x7F)
+    if not raw:
+        return ""
+
+    decoded = raw
+    for _ in range(3):  # 多轮解码，应对 &amp;colon; 之类的双重编码
+        nxt = _html.unescape(decoded)
+        if nxt == decoded:
+            break
+        decoded = nxt
+
+    if not _scheme_verdict(_strip_controls(raw)):
+        return ""
+    if decoded != raw and not _scheme_verdict(_strip_controls(decoded)):
+        return ""
+    return raw
+
+
+def is_safe_url(url) -> bool:
+    """sanitize_url 的布尔版本。"""
+    return bool(sanitize_url(url))

@@ -93,6 +93,24 @@ def _word_matches(word_config: Union[str, Dict], title_lower: str) -> bool:
         return word_config["word"].lower() in title_lower
 
 
+_GLOBAL_REGEX_CACHE: Dict[str, Optional["re.Pattern"]] = {}
+
+
+def _global_filter_matches(global_word, title_lower: str) -> bool:
+    """全局过滤词匹配：默认子串匹配，/pattern/ 形式按正则匹配（与词组语法一致）。"""
+    if isinstance(global_word, dict):
+        return _word_matches(global_word, title_lower)
+    word = str(global_word)
+    if len(word) > 2 and word.startswith("/") and re.match(r"^/(.+)/[a-z]*$", word):
+        if word not in _GLOBAL_REGEX_CACHE:
+            parsed = _parse_word(word)
+            _GLOBAL_REGEX_CACHE[word] = parsed["pattern"] if parsed["is_regex"] else None
+        pattern = _GLOBAL_REGEX_CACHE[word]
+        if pattern is not None:
+            return bool(pattern.search(title_lower))
+    return word.lower() in title_lower
+
+
 def load_frequency_words(
     frequency_file: Optional[str] = None,
 ) -> Tuple[List[Dict], List[str], List[str]]:
@@ -107,8 +125,14 @@ def load_frequency_words(
     词组语法：
     - 普通词：直接写入，任意匹配即可
     - +词：必须词，所有必须词都要匹配
-    - !词：过滤词，匹配则排除
+    - !词：过滤词，匹配则排除。注意：写在任意词组里的 !过滤词 都对**所有词组全局生效**
+      （与上游行为一致；需要只作用于某一组时，请改用该组的 +必须词 组合）
     - @数字：该词组最多显示的条数
+    - # 开头的行是注释；需要以 # 开头的关键词（如 #话题）时写成 \\#话题
+    - 分组之间用空行分隔，「空行」里只含空格/制表符也视为空行
+
+    全局过滤区（[GLOBAL_FILTER]）：每行一个词，子串匹配（不区分大小写）；
+    也支持 /正则/ 语法。
 
     Args:
         frequency_file: 频率词配置文件路径，默认从环境变量 FREQUENCY_WORDS_PATH 获取或使用 config/frequency_words.txt，短文件名从 config/custom/keyword/ 查找
@@ -136,7 +160,8 @@ def load_frequency_words(
     with open(frequency_path, "r", encoding="utf-8") as f:
         content = f.read()
 
-    word_groups = [group.strip() for group in content.split("\n\n") if group.strip()]
+    # 只含空白字符的「空行」同样作为分组分隔（"\n  \n" 不应把相邻两组合并）
+    word_groups = [group.strip() for group in re.split(r"\n[ \t\r\f\v]*\n", content) if group.strip()]
 
     processed_groups = []
     filter_words = []
@@ -146,8 +171,15 @@ def load_frequency_words(
     current_section = "WORD_GROUPS"
 
     for group in word_groups:
-        # 过滤空行和注释行（# 开头）
-        lines = [line.strip() for line in group.split("\n") if line.strip() and not line.strip().startswith("#")]
+        # 过滤空行和注释行（# 开头）；\# 开头表示字面量 #（如 #话题）
+        lines = []
+        for raw_line in group.split("\n"):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("\\#"):
+                line = line[1:]
+            lines.append(line)
 
         if not lines:
             continue
@@ -271,7 +303,7 @@ def matches_word_groups(
 
     # 全局过滤检查（优先级最高）
     if global_filters:
-        if any(global_word.lower() in title_lower for global_word in global_filters):
+        if any(_global_filter_matches(global_word, title_lower) for global_word in global_filters):
             return False
 
     # 如果没有配置词组，则匹配所有标题（支持显示全部新闻）

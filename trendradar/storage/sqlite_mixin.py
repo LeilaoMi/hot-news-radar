@@ -811,6 +811,27 @@ class SQLiteStorageMixin:
             print(f"[存储] 记录时间段执行失败: {e}")
             return False
 
+    def _delete_period_execution_impl(self, date_str: str, period_key: str, action: str) -> bool:
+        """删除一条时间段执行记录（表不存在视为成功）"""
+        try:
+            conn = self._get_connection(date_str)
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT name FROM sqlite_master
+                WHERE type='table' AND name='period_executions'
+            """)
+            if not cursor.fetchone():
+                return True
+            cursor.execute("""
+                DELETE FROM period_executions
+                WHERE execution_date = ? AND period_key = ? AND action = ?
+            """, (date_str, period_key, action))
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"[存储] 删除时间段执行记录失败: {e}")
+            return False
+
     # ========================================
     # RSS 数据存储
     # ========================================

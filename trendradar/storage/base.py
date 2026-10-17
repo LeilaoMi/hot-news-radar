@@ -465,6 +465,10 @@ class StorageBackend(ABC):
         """
         return False
 
+    def delete_period_execution(self, date_str: str, period_key: str, action: str) -> bool:
+        """撤销一条时间段执行记录（默认不支持，返回 False）"""
+        return False
+
     # === AI 智能筛选（默认实现，子类通过 mixin 覆盖） ===
 
     def begin_batch(self) -> None:

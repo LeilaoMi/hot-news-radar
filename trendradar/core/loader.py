@@ -12,15 +12,25 @@ from typing import Dict, Any, Optional
 import yaml
 
 from .config import parse_multi_account_config, validate_paired_configs
+from trendradar.utils.env import env_bool, env_float
 from trendradar.utils.time import DEFAULT_TIMEZONE
 
 
+VALID_REPORT_MODES = ("daily", "current", "incremental")
+
+
 def _get_env_bool(key: str) -> Optional[bool]:
-    """从环境变量获取布尔值，如果未设置返回 None"""
-    value = os.environ.get(key, "").strip().lower()
-    if not value:
-        return None
-    return value in ("true", "1")
+    """从环境变量获取布尔值，如果未设置返回 None（true/1/yes/on 为真，规则全项目统一）"""
+    return env_bool(key)
+
+
+def _get_env_bool_any(*keys: str) -> Optional[bool]:
+    """按顺序读取多个同义环境变量，返回第一个已设置的值"""
+    for key in keys:
+        value = env_bool(key)
+        if value is not None:
+            return value
+    return None
 
 
 def _get_env_int_or_none(key: str) -> Optional[int]:
@@ -57,7 +67,27 @@ def _load_crawler_config(config_data: Dict) -> Dict:
     advanced = config_data.get("advanced", {})
     crawler_config = advanced.get("crawler", {})
     platforms_config = config_data.get("platforms", {})
+    # 部分失败阈值：失败平台占比 >= 该值时以退出码 2 结束（默认 1.0 = 只有全部失败才算，且全部失败是致命错误）
+    threshold_env = env_float("PLATFORM_FAILURE_THRESHOLD")
+    failure_threshold = threshold_env if threshold_env is not None else crawler_config.get("failure_threshold", 1.0)
+    try:
+        failure_threshold = float(failure_threshold)
+    except (TypeError, ValueError):
+        failure_threshold = 1.0
+
+    max_cache_age_env = env_float("NEWSNOW_MAX_CACHE_AGE_HOURS")
+    max_cache_age_hours = (
+        max_cache_age_env if max_cache_age_env is not None
+        else crawler_config.get("max_cache_age_hours", 2)
+    )
+    try:
+        max_cache_age_hours = float(max_cache_age_hours)
+    except (TypeError, ValueError):
+        max_cache_age_hours = 2.0
+
     return {
+        "PLATFORM_FAILURE_THRESHOLD": failure_threshold,
+        "MAX_CACHE_AGE_SECONDS": int(max_cache_age_hours * 3600),
         "REQUEST_INTERVAL": crawler_config.get("request_interval", 100),
         "USE_PROXY": crawler_config.get("use_proxy", False),
         "DEFAULT_PROXY": crawler_config.get("default_proxy", ""),
@@ -75,10 +105,16 @@ def _load_report_config(config_data: Dict) -> Dict:
     max_news_env = _get_env_int_or_none("MAX_NEWS_PER_KEYWORD")
     report_mode_env = _get_env_str("REPORT_MODE")
 
+    report_mode = (report_mode_env or report_config.get("mode", "daily") or "daily").strip()
+    if report_mode not in VALID_REPORT_MODES:
+        raise ValueError(
+            f"report.mode / REPORT_MODE 取值非法: {report_mode!r}，可选: {', '.join(VALID_REPORT_MODES)}"
+        )
+
     return {
         # REPORT_MODE 支持环境变量覆盖：用于强制生成指定模式的报告
-        # （如 CI 中 daily 报告过期时，用 SCHEDULE_ENABLED=false REPORT_MODE=daily 补生成）
-        "REPORT_MODE": report_mode_env or report_config.get("mode", "daily"),
+        # （如 CI 中 daily 报告过期时，用 RENDER_ONLY=true SCHEDULE_ENABLED=false REPORT_MODE=daily 只渲染）
+        "REPORT_MODE": report_mode,
         "DISPLAY_MODE": report_config.get("display_mode", "keyword"),
         "RANK_THRESHOLD": report_config.get("rank_threshold", 10),
         "SORT_BY_POSITION_FIRST": sort_by_position_env if sort_by_position_env is not None else report_config.get("sort_by_position_first", False),
@@ -93,9 +129,11 @@ def _load_notification_config(config_data: Dict) -> Dict:
     batch_size = advanced.get("batch_size", {})
 
     max_accounts_env = _get_env_int_or_none("MAX_ACCOUNTS_PER_CHANNEL")
+    # 环境变量覆盖（用于 CI 补跑等只需要网页、不应推送的场景）
+    notification_env = _get_env_bool_any("NOTIFICATION_ENABLED", "ENABLE_NOTIFICATION")
 
     return {
-        "ENABLE_NOTIFICATION": notification.get("enabled", True),
+        "ENABLE_NOTIFICATION": notification_env if notification_env is not None else notification.get("enabled", True),
         "MESSAGE_BATCH_SIZE": batch_size.get("default", 4000),
         "DINGTALK_BATCH_SIZE": batch_size.get("dingtalk", 20000),
         "FEISHU_BATCH_SIZE": batch_size.get("feishu", 29000),
@@ -277,6 +315,9 @@ def _load_ai_config(config_data: Dict) -> Dict:
         "NUM_RETRIES": ai_config.get("num_retries", 2),
         "FALLBACK_MODELS": ai_config.get("fallback_models", []),
         "EXTRA_PARAMS": ai_config.get("extra_params", {}),
+
+        # AI 结果缓存数据库路径（translator/dedup 读取 CACHE_DB_PATH；之前 yaml 配置不生效）
+        "CACHE_DB_PATH": _get_env_str("AI_CACHE_DB") or ai_config.get("cache_db_path") or None,
     }
 
 
@@ -310,6 +351,11 @@ def _load_ai_translation_config(config_data: Dict) -> Dict:
         "ENABLED": enabled_env if enabled_env is not None else trans_config.get("enabled", False),
         "LANGUAGE": _get_env_str("AI_TRANSLATION_LANGUAGE") or trans_config.get("language", "English"),
         "PROMPT_FILE": trans_config.get("prompt_file", "ai_translation_prompt.txt"),
+        # 翻译结果缓存开关（translator 读取 CACHE_ENABLED；之前 yaml 配置不生效）
+        "CACHE_ENABLED": (
+            _get_env_bool("AI_CACHE_ENABLED") if _get_env_bool("AI_CACHE_ENABLED") is not None
+            else trans_config.get("cache_enabled", True)
+        ),
         "SCOPE": {
             "HOTLIST": scope.get("hotlist", True),
             "RSS": scope.get("rss", True),
@@ -394,8 +440,14 @@ def _load_storage_config(config_data: Dict) -> Dict:
     txt_enabled_env = _get_env_bool("STORAGE_TXT_ENABLED")
     html_enabled_env = _get_env_bool("STORAGE_HTML_ENABLED")
     pull_enabled_env = _get_env_bool("PULL_ENABLED")
+    # STORAGE_RETENTION_DAYS：同时作用于本地与远程（之前写入 STORAGE.RETENTION_DAYS，存储层从不读取）
+    shared_retention_env = _get_env_int_or_none("STORAGE_RETENTION_DAYS")
     local_retention_env = _get_env_int_or_none("LOCAL_RETENTION_DAYS")
     remote_retention_env = _get_env_int_or_none("REMOTE_RETENTION_DAYS")
+    if local_retention_env is None:
+        local_retention_env = shared_retention_env
+    if remote_retention_env is None:
+        remote_retention_env = shared_retention_env
     pull_days_env = _get_env_int_or_none("PULL_DAYS")
 
     return {
@@ -582,6 +634,9 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
 
     # 应用配置
     config.update(_load_app_config(config_data))
+
+    # 只渲染模式：不抓取、不调用 AI、不推送，只用存储中已有数据重新生成 HTML
+    config["RENDER_ONLY"] = bool(_get_env_bool("RENDER_ONLY"))
 
     # 爬虫配置
     config.update(_load_crawler_config(config_data))
