@@ -6,6 +6,10 @@
 """
 
 import re
+from typing import Dict
+
+from trendradar.notification.escaping import escape_text, safe_url
+from trendradar.report.helpers import clean_title, format_rank_display
 
 
 def strip_markdown(text: str) -> str:
@@ -91,3 +95,141 @@ def convert_markdown_to_mrkdwn(content: str) -> str:
     content = re.sub(r'\*\*([^*]+)\*\*', r'*\1*', content)
 
     return content
+
+
+# ---------------------------------------------------------------------------
+# 推送渠道标题格式化（带逐字段转义）
+#
+# report.formatter.format_title_for_platform 是 HTML 报告/历史遗留接口，
+# 其推送分支对标题、来源、关键词、链接不做（或只做部分）转义：
+#   - Telegram parse_mode=HTML 下标题里一个 "<" / "&" 就会让整批 400
+#   - 飞书/Slack/Discord 可被标题注入 <at id=all>、<!channel>、@everyone
+# 推送侧统一使用本函数，所有外部字段先按渠道转义，链接只放行 http(s)。
+# ---------------------------------------------------------------------------
+
+
+# 渠道 → 标题样式
+_TITLE_STYLE = {
+    "feishu": "feishu",
+    "dingtalk": "dingtalk",
+    "wework": "markdown",
+    "bark": "markdown",
+    "ntfy": "ntfy",
+    "telegram": "telegram",
+    "slack": "slack",
+}
+
+
+def format_link(format_type: str, title: str, url: str) -> str:
+    """生成渠道链接。title 为原始文本（内部转义），url 为原始链接（内部校验）。
+
+    链接不安全/为空时只输出转义后的纯文本标题。
+    """
+    text = escape_text(title, format_type)
+    link = safe_url(url)
+    if not text:
+        text = escape_text(link, format_type) if link else ""
+    if not link:
+        return text
+    if format_type == "telegram":
+        return f'<a href="{escape_text(link, "telegram")}">{text}</a>'
+    if format_type == "slack":
+        # Slack 链接 <url|text>：url 中的 | 与 > 已被 safe_url 编码
+        return f"<{link}|{text}>"
+    return f"[{text}]({link})"
+
+
+def format_title_for_platform(
+    platform: str, title_data: Dict, show_source: bool = True, show_keyword: bool = False
+) -> str:
+    """推送渠道统一标题格式化（输出与 report.formatter 版本一致，但所有字段已转义）
+
+    Args:
+        platform: feishu / dingtalk / wework / bark / ntfy / telegram / slack
+        title_data: 标题数据字典（title, source_name, time_display, count, ranks,
+            rank_threshold, url, mobile_url, is_new, matched_keyword）
+        show_source: 是否显示来源名称
+        show_keyword: 是否显示关键词标签
+    """
+    style = _TITLE_STYLE.get(platform, "markdown")
+    esc_fmt = platform if platform in _TITLE_STYLE else "wework"
+
+    ranks = title_data.get("ranks") or []
+    rank_display = format_rank_display(
+        ranks,
+        title_data.get("rank_threshold", 10),
+        "wework" if style == "markdown" else platform,
+        rank_timeline=title_data.get("rank_timeline"),
+    ) if ranks else ""
+
+    raw_url = title_data.get("mobile_url") or title_data.get("url") or ""
+    cleaned = clean_title(title_data.get("title", "") or "")
+    if not cleaned:
+        cleaned = safe_url(raw_url)
+    formatted_title = format_link(esc_fmt, cleaned, raw_url)
+
+    source = escape_text(title_data.get("source_name", ""), esc_fmt)
+    keyword = escape_text(title_data.get("matched_keyword", ""), esc_fmt) if show_keyword else ""
+    time_display = escape_text(title_data.get("time_display", ""), esc_fmt)
+    count = title_data.get("count", 1) or 1
+    title_prefix = "🆕 " if title_data.get("is_new") else ""
+
+    if style == "feishu":
+        if show_source:
+            result = f"<font color='grey'>&#91;{source}&#93;</font> {title_prefix}{formatted_title}"
+        elif show_keyword and keyword:
+            result = f"<font color='blue'>&#91;{keyword}&#93;</font> {title_prefix}{formatted_title}"
+        else:
+            result = f"{title_prefix}{formatted_title}"
+        if rank_display:
+            result += f" {rank_display}"
+        if time_display:
+            result += f" <font color='grey'>- {time_display}</font>"
+        if count > 1:
+            result += f" <font color='green'>({count}次)</font>"
+        return result
+
+    if style == "telegram":
+        if show_source:
+            result = f"[{source}] {title_prefix}{formatted_title}"
+        elif show_keyword and keyword:
+            result = f"<b>[{keyword}]</b> {title_prefix}{formatted_title}"
+        else:
+            result = f"{title_prefix}{formatted_title}"
+        if rank_display:
+            result += f" {rank_display}"
+        if time_display:
+            result += f" <code>- {time_display}</code>"
+        if count > 1:
+            result += f" <code>({count}次)</code>"
+        return result
+
+    if style == "slack":
+        if show_source:
+            result = f"[{source}] {title_prefix}{formatted_title}"
+        elif show_keyword and keyword:
+            result = f"*[{keyword}]* {title_prefix}{formatted_title}"
+        else:
+            result = f"{title_prefix}{formatted_title}"
+        if rank_display:
+            result += f" {rank_display}"
+        if time_display:
+            result += f" `- {time_display}`"
+        if count > 1:
+            result += f" `({count}次)`"
+        return result
+
+    # dingtalk / wework / bark / ntfy（markdown 系）
+    if show_source:
+        result = f"[{source}] {title_prefix}{formatted_title}"
+    elif show_keyword and keyword:
+        result = f"[{keyword}] {title_prefix}{formatted_title}"
+    else:
+        result = f"{title_prefix}{formatted_title}"
+    if rank_display:
+        result += f" {rank_display}"
+    if time_display:
+        result += f" `- {time_display}`" if style == "ntfy" else f" - {time_display}"
+    if count > 1:
+        result += f" `({count}次)`" if style == "ntfy" else f" ({count}次)"
+    return result

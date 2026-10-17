@@ -302,12 +302,14 @@ notification:
     email:
       from: ""                        # 发件人邮箱地址
       password: ""                    # 发件人邮箱密码或授权码
-      to: ""                          # 收件人邮箱，多个用逗号分隔
+      to: ""                          # 收件人邮箱，多个用逗号(,)或分号(;)分隔（均视为同一封邮件的多个收件人）
       smtp_server: ""                 # SMTP 服务器（可选，留空自动识别）
       smtp_port: ""                   # SMTP 端口（可选，留空自动识别）
 
     ntfy:
       server_url: "https://ntfy.sh"   # ntfy 服务器地址（可改为自托管）
+                                      # ⚠️ 服务器有默认值，因此只要填了 topic（或设置了 NTFY_TOPIC 环境变量/Secret）就会推送完整报告；
+                                      #    ntfy.sh 上不带 token 的 topic 是公开的，知道名字即可订阅
       topic: ""                       # ntfy 主题名称
       token: ""                       # ntfy 访问令牌（可选，用于私有主题）
 

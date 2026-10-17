@@ -12,8 +12,11 @@
 
 from __future__ import annotations
 
+import json
+import threading
 import time
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+from collections import OrderedDict
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from trendradar.core.config import (
     get_account_at_index,
@@ -42,6 +45,70 @@ log = get_logger(__name__)
 # 类型检查时导入，运行时不导入（避免循环导入）
 if TYPE_CHECKING:
     from trendradar.ai import AIAnalysisResult, AITranslator
+
+
+# ---------------------------------------------------------------------------
+# 进程内翻译复用
+#
+# 一轮运行里 HTML 生成阶段和推送阶段会各创建一个 NotificationDispatcher，
+# 各自调用 translate_content 翻译同一批热榜标题（AI 成本翻倍、耗时再加一个预算周期，
+# 网页和推送的译文还可能不一致）。这里在进程内缓存成功的译文：同一标题只翻译一次，
+# 后续调用（含所有渠道）直接复用。AI 不可用触发熔断后，冷却期内不再重复尝试。
+# ---------------------------------------------------------------------------
+
+_TRANSLATION_MEMO_MAX = 5000
+_TRANSLATION_MEMO: "OrderedDict[Tuple[str, str], str]" = OrderedDict()
+_TRANSLATION_LOCK = threading.Lock()
+_TRANSLATION_COOLDOWN_SECONDS = 1800
+_translation_disabled_until = 0.0
+
+
+def _memo_get(language: str, text: str) -> Optional[str]:
+    with _TRANSLATION_LOCK:
+        key = (language, text)
+        value = _TRANSLATION_MEMO.get(key)
+        if value is not None:
+            _TRANSLATION_MEMO.move_to_end(key)
+        return value
+
+
+def _memo_put(language: str, text: str, translated: str) -> None:
+    with _TRANSLATION_LOCK:
+        _TRANSLATION_MEMO[(language, text)] = translated
+        _TRANSLATION_MEMO.move_to_end((language, text))
+        while len(_TRANSLATION_MEMO) > _TRANSLATION_MEMO_MAX:
+            _TRANSLATION_MEMO.popitem(last=False)
+
+
+def reset_translation_memo() -> None:
+    """清空进程内译文缓存与熔断状态（测试用）"""
+    global _translation_disabled_until
+    with _TRANSLATION_LOCK:
+        _TRANSLATION_MEMO.clear()
+        _translation_disabled_until = 0.0
+
+
+def parse_accounts(config_value: Optional[str]) -> List[str]:
+    """解析多账号配置，并去掉末尾多余的空项（"t1;" → ["t1"]）
+
+    中间的空项保留用于占位（";token2" 表示第一个账号无 token）。
+    """
+    accounts = parse_multi_account_config(config_value or "")
+    while accounts and not accounts[-1]:
+        accounts.pop()
+    return accounts
+
+
+def parse_webhook_templates(config_value: Optional[str]) -> List[str]:
+    """解析通用 Webhook 模板。整串本身是合法 JSON 模板时不按 ; 拆分（JSON 内容里可能含分号）"""
+    if not config_value or not config_value.strip():
+        return []
+    probe = config_value.replace("{content}", "x").replace("{title}", "x")
+    try:
+        json.loads(probe)
+        return [config_value.strip()]
+    except json.JSONDecodeError:
+        return parse_accounts(config_value)
 
 
 class NotificationDispatcher:
@@ -163,6 +230,32 @@ class NotificationDispatcher:
             log.info("[翻译] 没有需要翻译的内容")
             return report_data, rss_items, rss_new_items, standalone_data
 
+        # 进程内复用：已翻译过的标题直接回填，只把新标题送去 AI
+        global _translation_disabled_until
+        language = str(getattr(self.translator, "target_language", ""))
+        memo_hits = 0
+        pending_titles: List[str] = []
+        pending_locations: List[tuple] = []
+        for text, location in zip(titles_to_translate, title_locations):
+            cached = _memo_get(language, text) if text and text.strip() else None
+            if cached is not None:
+                self._apply_translation(location, cached, report_data, rss_items, rss_new_items, standalone_data)
+                memo_hits += 1
+            else:
+                pending_titles.append(text)
+                pending_locations.append(location)
+        if memo_hits:
+            log.info(f"[翻译] 复用本轮已翻译结果 {memo_hits}/{len(titles_to_translate)} 条")
+        if not pending_titles:
+            return report_data, rss_items, rss_new_items, standalone_data
+        if time.monotonic() < _translation_disabled_until:
+            log.warning(
+                f"[翻译] AI 翻译在本轮早些时候已熔断，跳过剩余 {len(pending_titles)} 条（保留原文）"
+            )
+            return report_data, rss_items, rss_new_items, standalone_data
+        titles_to_translate = pending_titles
+        title_locations = pending_locations
+
         total_count = len(titles_to_translate)
         trans_config = self.config.get("AI_TRANSLATION", {})
         batch_size = trans_config.get("BATCH_SIZE", 100)
@@ -181,8 +274,10 @@ class NotificationDispatcher:
         batch_count = 0
 
         # 预算与熔断：AI 服务不可用时每批会挂满超时（实测 2 次尝试 x 180s ≈ 6 分钟/批），
-        # 4 批会把 workflow 的 15 分钟时限烧穿导致整轮被砍、网页零更新（2026-09-13~15 事故）。
-        # 翻译是锦上添花：超预算/连续失败后放弃剩余批次、保留原文，主流程照常发布。
+        # 多批会烧穿 workflow 时限导致整轮被砍、网页零更新（2026-09-13~15 事故）。
+        # 翻译是锦上添花：超预算/连续失败后放弃剩余批次、保留原文，主流程照常发布；
+        # 熔断后冷却期内本进程的其它 translate_content 调用（如推送阶段）不再重试。
+        # 注意：预算只在批次之间检查，单批最长仍受 AI 客户端自身超时约束。
         TRANSLATE_BUDGET_SECONDS = 300
         budget_start = time.monotonic()
         consecutive_failures = 0
@@ -197,6 +292,7 @@ class NotificationDispatcher:
                     f"[翻译] 累计耗时 {elapsed:.0f}s 超预算 {TRANSLATE_BUDGET_SECONDS}s，"
                     f"放弃剩余 {remaining} 批共 {total_count - i} 条（保留原文，不影响发布）"
                 )
+                _translation_disabled_until = time.monotonic() + _TRANSLATION_COOLDOWN_SECONDS
                 break
             batch_texts = titles_to_translate[i:i + batch_size]
             batch_num = batch_count + 1
@@ -216,6 +312,7 @@ class NotificationDispatcher:
                         f"[翻译] 连续 {consecutive_failures} 批全部失败（疑似 AI 服务不可用），"
                         f"跳过剩余 {remaining_count} 条（保留原文，不影响发布）"
                     )
+                    _translation_disabled_until = time.monotonic() + _TRANSLATION_COOLDOWN_SECONDS
                     break
             else:
                 consecutive_failures = 0
@@ -256,26 +353,35 @@ class NotificationDispatcher:
 
         log.info(f"[翻译] 翻译完成: {result.success_count}/{result.total_count} 成功")
 
-        # 回填翻译结果（仅在翻译文本非空时替换，防止空翻译覆盖原始标题）
-        for i, (loc_type, idx1, idx2) in enumerate(title_locations):
+        # 回填翻译结果（仅在翻译文本非空时替换，防止空翻译覆盖原始标题），并写入进程内缓存
+        for i, location in enumerate(title_locations):
             if i < len(result.results) and result.results[i].success:
                 translated = result.results[i].translated_text
                 if not translated or not translated.strip():
                     continue
-                if loc_type == "stats":
-                    report_data["stats"][idx1]["titles"][idx2]["title"] = translated
-                elif loc_type == "new_titles":
-                    report_data["new_titles"][idx1]["titles"][idx2]["title"] = translated
-                elif loc_type == "rss_items" and rss_items:
-                    rss_items[idx1]["titles"][idx2]["title"] = translated
-                elif loc_type == "rss_new_items" and rss_new_items:
-                    rss_new_items[idx1]["titles"][idx2]["title"] = translated
-                elif loc_type == "standalone_platforms" and standalone_data:
-                    standalone_data["platforms"][idx1]["items"][idx2]["title"] = translated
-                elif loc_type == "standalone_rss" and standalone_data:
-                    standalone_data["rss_feeds"][idx1]["items"][idx2]["title"] = translated
+                original = titles_to_translate[i]
+                if original and original.strip():
+                    _memo_put(language, original, translated)
+                self._apply_translation(location, translated, report_data, rss_items, rss_new_items, standalone_data)
 
         return report_data, rss_items, rss_new_items, standalone_data
+
+    @staticmethod
+    def _apply_translation(location, translated, report_data, rss_items, rss_new_items, standalone_data) -> None:
+        """把一条译文回填到对应位置"""
+        loc_type, idx1, idx2 = location
+        if loc_type == "stats":
+            report_data["stats"][idx1]["titles"][idx2]["title"] = translated
+        elif loc_type == "new_titles":
+            report_data["new_titles"][idx1]["titles"][idx2]["title"] = translated
+        elif loc_type == "rss_items" and rss_items:
+            rss_items[idx1]["titles"][idx2]["title"] = translated
+        elif loc_type == "rss_new_items" and rss_new_items:
+            rss_new_items[idx1]["titles"][idx2]["title"] = translated
+        elif loc_type == "standalone_platforms" and standalone_data:
+            standalone_data["platforms"][idx1]["items"][idx2]["title"] = translated
+        elif loc_type == "standalone_rss" and standalone_data:
+            standalone_data["rss_feeds"][idx1]["items"][idx2]["title"] = translated
 
     def dispatch_all(
         self,
@@ -316,7 +422,8 @@ class NotificationDispatcher:
         display_regions = self.config.get("DISPLAY", {}).get("REGIONS", {})
 
         # 执行翻译（如果启用，根据 display_regions 跳过不展示的区域）
-        # skip_translation=True 时，RSS 已在上游翻译过，跳过 RSS 重复翻译
+        # 翻译在分发到各渠道之前只做一次，所有渠道复用同一份译文；
+        # skip_translation=True 时 RSS/独立区已在上游翻译过，热榜若已在 HTML 阶段翻译过则命中进程内缓存，不会重复调用 AI
         if not skip_translation:
             report_data, rss_items, rss_new_items, standalone_data = self.translate_content(
                 report_data, rss_items, rss_new_items, standalone_data, display_regions
@@ -413,7 +520,7 @@ class NotificationDispatcher:
         Returns:
             bool: 任一账号发送成功则返回 True
         """
-        accounts = parse_multi_account_config(config_value)
+        accounts = parse_accounts(config_value)
         if not accounts:
             return False
 
@@ -591,8 +698,8 @@ class NotificationDispatcher:
         )
         display_regions = display_regions or {}
 
-        telegram_tokens = parse_multi_account_config(self.config["TELEGRAM_BOT_TOKEN"])
-        telegram_chat_ids = parse_multi_account_config(self.config["TELEGRAM_CHAT_ID"])
+        telegram_tokens = parse_accounts(self.config["TELEGRAM_BOT_TOKEN"])
+        telegram_chat_ids = parse_accounts(self.config["TELEGRAM_CHAT_ID"])
 
         if not telegram_tokens or not telegram_chat_ids:
             return False
@@ -656,8 +763,8 @@ class NotificationDispatcher:
         display_regions = display_regions or {}
 
         ntfy_server_url = self.config["NTFY_SERVER_URL"]
-        ntfy_topics = parse_multi_account_config(self.config["NTFY_TOPIC"])
-        ntfy_tokens = parse_multi_account_config(self.config.get("NTFY_TOKEN", ""))
+        ntfy_topics = parse_accounts(self.config["NTFY_TOPIC"])
+        ntfy_tokens = parse_accounts(self.config.get("NTFY_TOKEN", ""))
 
         if not ntfy_server_url or not ntfy_topics:
             return False
@@ -687,7 +794,7 @@ class NotificationDispatcher:
                     proxy_url=proxy_url,
                     mode=mode,
                     account_label=account_label,
-                    batch_size=3800,
+                    batch_size=self.config.get("NTFY_BATCH_SIZE", 3800),
                     split_content_func=self.split_content_func,
                     rss_items=rss_items,
                     rss_new_items=rss_new_items,
@@ -798,8 +905,8 @@ class NotificationDispatcher:
         )
         display_regions = display_regions or {}
 
-        urls = parse_multi_account_config(self.config.get("GENERIC_WEBHOOK_URL", ""))
-        templates = parse_multi_account_config(self.config.get("GENERIC_WEBHOOK_TEMPLATE", ""))
+        urls = parse_accounts(self.config.get("GENERIC_WEBHOOK_URL", ""))
+        templates = parse_webhook_templates(self.config.get("GENERIC_WEBHOOK_TEMPLATE", ""))
 
         if not urls:
             return False
