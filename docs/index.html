@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Hot News Radar · 新闻中心</title>
 <link rel="manifest" href="manifest.json">
+<link rel="alternate" type="application/rss+xml" title="Hot News Radar 快照订阅 (RSS)" href="reports/feed.xml">
+<link rel="alternate" type="application/feed+json" title="Hot News Radar 快照订阅 (JSON Feed)" href="reports/feed.json">
 <meta name="theme-color" content="#1a2233">
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="icon" type="image/png" href="icon-192.png">
@@ -40,12 +42,12 @@ footer a{color:#0969da;text-decoration:none}
 <footer>引擎 <a href="https://github.com/sansan0/TrendRadar" target="_blank">TrendRadar</a> (GPL-3.0) · <a href="https://github.com/LeilaoMi/hot-news-radar">GitHub 仓库</a></footer>
 </div>
 <script>
-fetch('reports/latest/current.html').then(r=>r.text()).then(t=>{
+fetch('reports/latest/current.html',{cache:'no-cache'}).then(r=>r.text()).then(t=>{
   const d=new DOMParser().parseFromString(t,'text/html');
   const n=d.querySelectorAll('.news-item,.new-item,.rss-item').length;
   if(n) document.getElementById('cur-meta').textContent=`${n} 条 · 每小时更新 →`;
 }).catch(()=>{});
-fetch('reports/archive.html').then(r=>r.text()).then(t=>{
+fetch('reports/archive.html',{cache:'no-cache'}).then(r=>r.text()).then(t=>{
   const m=t.match(/(\d+)\s*<\/b><span>覆盖天数/); const n=t.match(/(\d+)\s*<\/b><span>快照总数/);
   if(m) document.getElementById('archive-meta').textContent=`已有 ${m[1]} 天 ${n?n[1]:''} 快照 →`;
 }).catch(()=>{});

@@ -2,247 +2,254 @@ name: Get Hot News
 
 on:
   schedule:
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # ⚠️ 试用版说明 / Trial Mode
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    #
-    # 🔄 运行机制 / How it works:
-    #    - 每个周期为 7 天，届时自动停止
-    #    - 运行 "Check In" 会重置周期（重新开始 7 天倒计时，而非累加）
-    #    - Each cycle is 7 days, then auto-stops
-    #    - "Check In" resets the cycle (restarts 7-day countdown, not cumulative)
-    #
-    # 💡 设计初衷 / Why this design:
-    #    如果 7 天都忘了签到，或许这些资讯对你来说并非刚需
-    #    适时的暂停，能帮你从信息流中抽离，给大脑留出喘息的空间
-    #    If you forget for 7 days, maybe you don't really need it
-    #    A timely pause helps you detach from the stream and gives your mind space
-    #
-    # 🙏 珍惜资源 / Respect shared resources:
-    #    GitHub Actions 是平台提供的公共资源，每次运行都会消耗算力
-    #    签到机制确保资源分配给真正需要的用户，感谢你的理解与配合
-    #    GitHub Actions is a shared public resource provided by the platform
-    #    Check-in ensures resources go to those who truly need it — thank you
-    #
-    # 🚀 长期使用请部署 Docker 版本 / For long-term use, deploy Docker version
-    #
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    #
-    # 📝 每小时两次（:05 / :35）：保证 20:30-21:30 与 07:30-08:30 推送窗口内
-    #    必有至少一次命中。调度器对已执行窗口有 once 幂等保护，不会重复推送。
-    #    GitHub Actions schedule 有 0~30 分钟随机延迟，单次 cron 会偶发错过窄窗口。
+    # 每小时 :05 / :35 各一次。GitHub Actions 的 schedule 实际会稀疏、延迟触发
+    # （近期每天只跑 4~6 次、时刻不规则），因此推送窗口放宽为
+    # 早 06:00-10:00、晚 19:00-23:59（Asia/Shanghai，见 config/timeline.yaml 的 custom），
+    # 按真实触发记录回放命中率 28/28、23/28 天。不使用外部 cron。
+    # 窗口内只推一次靠调度器的 once 防重：其执行记录在 output/news/<date>.db，
+    # 由下面的 actions/cache 跨运行保留。
     - cron: "5,35 * * * *"
 
   workflow_dispatch:
 
+# 排队而不是取消：AI 变慢时单次运行可能超过 30 分钟，cancel-in-progress 会让它
+# 永远发布不了，还可能在同步中途被打断（审计 3.7）。GitHub 同组最多保留一个排队中的运行。
 concurrency:
   group: crawler-${{ github.ref_name }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
-permissions:
-  contents: read
-  actions: write
+# 默认不授予任何权限，按 job 显式声明
+permissions: {}
 
 jobs:
   crawl:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 50
     permissions:
-      contents: write
-      actions: write
+      contents: write   # 仅 Sync 步骤用于推送 reports 分支
 
-    # ── 作业级环境变量（单一来源）─────────────────────────────────────
-    # 27 项 secrets 只在这里声明一次，本作业内所有 step（含 Run crawler
-    # 与 Publish reports 的 daily 补跑）自动继承。
-    # 历史教训：08-29 引入 daily 补跑时 Publish step 漏配 env，补跑进程
-    # 拿不到 AI_API_KEY，AI 区域显示「待配置」。收敛到 job 级根治此类问题，
-    # 新增 secret 只需改这一处。
+    # 作业级只放非敏感配置；secrets 只注入到真正需要它的步骤（审计 3.5）
     env:
-      FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      DINGTALK_WEBHOOK_URL: ${{ secrets.DINGTALK_WEBHOOK_URL }}
-      WEWORK_WEBHOOK_URL: ${{ secrets.WEWORK_WEBHOOK_URL }}
-      WEWORK_MSG_TYPE: ${{ secrets.WEWORK_MSG_TYPE }}
-      EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
-      EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-      EMAIL_TO: ${{ secrets.EMAIL_TO }}
-      EMAIL_SMTP_SERVER: ${{ secrets.EMAIL_SMTP_SERVER }}
-      EMAIL_SMTP_PORT: ${{ secrets.EMAIL_SMTP_PORT }}
-      NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-      NTFY_SERVER_URL: ${{ secrets.NTFY_SERVER_URL }}
-      NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
-      BARK_URL: ${{ secrets.BARK_URL }}
-      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-      # 通用Webhook配置
-      GENERIC_WEBHOOK_URL: ${{ secrets.GENERIC_WEBHOOK_URL }}
-      GENERIC_WEBHOOK_TEMPLATE: ${{ secrets.GENERIC_WEBHOOK_TEMPLATE }}
-      # AI 配置（ai_analysis / ai_translation / ai_dedup / ai_daily 共享模型配置）
-      AI_ANALYSIS_ENABLED: ${{ secrets.AI_ANALYSIS_ENABLED }}
-      AI_API_KEY: ${{ secrets.AI_API_KEY }}
-      AI_MODEL: ${{ secrets.AI_MODEL }}
-      AI_API_BASE: ${{ secrets.AI_API_BASE }}
-      # AI 功能级开关（2026-09-09 复盘补映射：用户已配 AI_DEDUP_ENABLED secret，
-      # 但本 env 块未注入导致开关从未生效——功能级 env 必须在此显式声明）
-      AI_DEDUP_ENABLED: ${{ secrets.AI_DEDUP_ENABLED }}
-      AI_DAILY_ENABLED: ${{ secrets.AI_DAILY_ENABLED }}
-      # 远程存储配置
-      S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
-      S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
-      S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
-      S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
-      S3_REGION: ${{ secrets.S3_REGION }}
       GITHUB_ACTIONS: true
+      AI_CACHE_DB: output/ai_cache.db
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
           clean: true
-          persist-credentials: true
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # 不把 token 写进 .git/config：后续步骤会运行全部第三方依赖
+          persist-credentials: false
 
       # ── 把历史报告拉到 docs/reports/ ───────────────────────────────────
-      # 报告已迁到独立的 reports 分支（Pages 发布源），master 不再存放。
-      # 但 gen_archive.py / retention.py / gen_daily_index.py 需要遍历全部
-      # 历史目录才能生成归档页和做保留期清理，所以这里先把历史拉回来，
-      # 这样下游脚本一行都不用改。
-      #
-      # 拉的是 reports 分支，与最终发布目标一致，不存在「从旧位置读到脏数据」的可能。
+      # 报告在独立的 reports 分支（Pages 发布源）。gen_archive / retention 需要遍历全部
+      # 历史目录，所以先把它浅克隆下来。克隆保留在 /tmp/pages-content：
+      #   - 它的 HEAD 作为 Sync 步骤 --force-with-lease 的预期基线（REPORTS_BASE_OID）
+      #   - 它的对象库让 Sync 只上传变化的文件
       - name: Restore historical reports from reports branch
-        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          set -e
-          git clone --depth 1 --branch reports \
-            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" \
-            /tmp/pages-content
+          set -euo pipefail
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          git -c http.extraheader="AUTHORIZATION: basic $auth" \
+            clone --quiet --depth 1 --branch reports \
+            "https://github.com/${GITHUB_REPOSITORY}.git" /tmp/pages-content
+          base_oid="$(git -C /tmp/pages-content rev-parse HEAD)"
+          echo "REPORTS_BASE_OID=$base_oid" >> "$GITHUB_ENV"
           rm -rf docs/reports
           mkdir -p docs
           mv /tmp/pages-content/reports docs/reports
-          rm -rf /tmp/pages-content
-          echo "历史报告就位：$(ls docs/reports | wc -l) 个条目"
+          echo "历史报告就位：$(find docs/reports -mindepth 1 -maxdepth 1 | wc -l) 个条目，reports 基线 ${base_oid:0:12}"
 
       - name: Set up Python
-        if: success()
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
 
       - name: Install uv
-        if: success()
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
 
       - name: Install dependencies
-        if: success()
         run: uv sync --frozen --no-dev
 
       - name: Verify required files
-        if: success()
         run: |
           if [ ! -f config/config.yaml ]; then
-            echo "Error: Config missing"
+            echo "::error::config/config.yaml 缺失"
             exit 1
           fi
 
+      # ── 跨运行状态（审计第 1 节 P0）──────────────────────────────────────
+      # 没有它，每次运行都从空 SQLite 开始：新增检测、当日汇总、排名时间线、
+      # once 防重推、AI 缓存全部失效。cache 条目不可变，所以每次用新 key 保存
+      # （run_id + attempt），恢复时按前缀取最近的一份。
+      - name: Restore cross-run state (SQLite)
+        id: state-restore
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            output/news
+            output/rss
+            output/ai_cache.db
+          key: hnr-state-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            hnr-state-v1-
+
+      - name: Show restored state
+        env:
+          CACHE_KEY: ${{ steps.state-restore.outputs.cache-matched-key }}
+        run: |
+          echo "恢复的缓存：${CACHE_KEY:-（未命中，从空库开始）}"
+          python3 scripts/check_state.py restore
+
       - name: Run crawler
-        if: success()
-        # 环境变量统一在 job 级 env 声明，本作业内所有 step 共享
-        run: uv run python -m trendradar
+        id: crawl
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DINGTALK_WEBHOOK_URL: ${{ secrets.DINGTALK_WEBHOOK_URL }}
+          WEWORK_WEBHOOK_URL: ${{ secrets.WEWORK_WEBHOOK_URL }}
+          WEWORK_MSG_TYPE: ${{ secrets.WEWORK_MSG_TYPE }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          EMAIL_SMTP_SERVER: ${{ secrets.EMAIL_SMTP_SERVER }}
+          EMAIL_SMTP_PORT: ${{ secrets.EMAIL_SMTP_PORT }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_SERVER_URL: ${{ secrets.NTFY_SERVER_URL }}
+          NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+          BARK_URL: ${{ secrets.BARK_URL }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          GENERIC_WEBHOOK_URL: ${{ secrets.GENERIC_WEBHOOK_URL }}
+          GENERIC_WEBHOOK_TEMPLATE: ${{ secrets.GENERIC_WEBHOOK_TEMPLATE }}
+          # AI（ai_analysis / ai_translation / ai_dedup / ai_daily / ai_filter）。
+          # 功能级 env 必须在这里显式映射，否则同名 secret 不会生效（2026-09-09 复盘）。
+          # 未配置的 secret 是空字符串，loader 会回退到 config.yaml。
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_MODEL: ${{ secrets.AI_MODEL }}
+          AI_API_BASE: ${{ secrets.AI_API_BASE }}
+          AI_ANALYSIS_MODEL: ${{ secrets.AI_ANALYSIS_MODEL }}
+          AI_TIMEOUT: ${{ secrets.AI_TIMEOUT }}
+          AI_ANALYSIS_ENABLED: ${{ secrets.AI_ANALYSIS_ENABLED }}
+          AI_TRANSLATION_ENABLED: ${{ secrets.AI_TRANSLATION_ENABLED }}
+          AI_TRANSLATION_LANGUAGE: ${{ secrets.AI_TRANSLATION_LANGUAGE }}
+          AI_DEDUP_ENABLED: ${{ secrets.AI_DEDUP_ENABLED }}
+          AI_DAILY_ENABLED: ${{ secrets.AI_DAILY_ENABLED }}
+          AI_FILTER_ENABLED: ${{ secrets.AI_FILTER_ENABLED }}
+          # 远程存储（四项齐全才会启用 S3，否则用上面恢复的本地库）
+          S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
+          S3_REGION: ${{ secrets.S3_REGION }}
+        run: |
+          uv run python -m trendradar
+          python3 scripts/check_state.py after-crawl
 
       - name: Publish reports to docs/reports/
-        if: success()
-        # 本步骤内的 daily 补跑（SCHEDULE_ENABLED=false REPORT_MODE=daily）
-        # 是一次完整的爬虫执行（含 AI 分析/翻译/推送），所需 secrets/配置
-        # 已由作业级 env 统一提供，无需在此重复声明。
+        # 本步骤刻意**不注入任何推送渠道的 secrets**：这里的 daily 补渲染必须零副作用。
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_MODEL: ${{ secrets.AI_MODEL }}
+          AI_API_BASE: ${{ secrets.AI_API_BASE }}
+          AI_ANALYSIS_MODEL: ${{ secrets.AI_ANALYSIS_MODEL }}
+          AI_ANALYSIS_ENABLED: ${{ secrets.AI_ANALYSIS_ENABLED }}
+          AI_TRANSLATION_ENABLED: ${{ secrets.AI_TRANSLATION_ENABLED }}
+          AI_DAILY_ENABLED: ${{ secrets.AI_DAILY_ENABLED }}
+          S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
+          S3_REGION: ${{ secrets.S3_REGION }}
         run: |
-          set -e
+          set -euo pipefail
           if [ ! -d output/html ]; then
             echo "no output/html — nothing to publish"
             exit 0
           fi
           mkdir -p docs/reports
           cp -r output/html/. docs/reports/
+
+          # ── 当日汇总保鲜（只渲染，零副作用）───────────────────────────
+          # 判定标准：latest/daily.html 必须是站点时区「今天」生成的（check_daily_freshness.py）。
+          # 晚间窗口内主运行本身会生成真正的当日汇总；其余时间这里用已存的数据补渲染一份
+          # 「截至目前的当日汇总」。
+          # RENDER_ONLY=true：跳过抓取、跳过 AI、跳过一切推送，只从已存数据渲染 HTML。
+          # 额外防线：本步骤没有任何推送渠道的 secrets，NOTIFICATION_ENABLED=false 也一并设置；
+          # 只拷回 latest/daily.html，不把补渲染产物写进日期目录（避免被当成时段快照）。
+          # 注意：必须写在 if 条件里——脚本返回 1 表示「需要补」，直接调用会被 set -e 终止。
+          if ! python3 scripts/check_daily_freshness.py; then
+            echo "补渲染当日汇总（RENDER_ONLY=true SCHEDULE_ENABLED=false REPORT_MODE=daily）"
+            rm -f output/html/latest/daily.html
+            RENDER_ONLY=true SCHEDULE_ENABLED=false REPORT_MODE=daily NOTIFICATION_ENABLED=false \
+              uv run python -m trendradar
+            if [ -f output/html/latest/daily.html ]; then
+              mkdir -p docs/reports/latest
+              cp output/html/latest/daily.html docs/reports/latest/daily.html
+            else
+              echo "::warning::补渲染没有产出 output/html/latest/daily.html，保留现有的当日汇总"
+            fi
+          fi
+
           # gen_daily_index 必须先于 gen_archive：归档页要检查 older.html 是否存在
-          # 才渲染「更早归档」入口，顺序反了会导致该入口在首次生成时缺失。
+          # 才渲染「更早归档」入口。
           python3 scripts/gen_daily_index.py
           python3 scripts/gen_archive.py
           KEEP_FULL_DAYS=90 python3 scripts/retention.py
-          python3 scripts/gen_daily_index.py
-          python3 scripts/gen_archive.py
-          python3 scripts/gen_feed.py
-          python3 scripts/build_trends.py
+          # reports/index.html 在 gen_archive 之前复制，让它按自身层级修正导航前缀
           if [ -f docs/reports/latest/incremental.html ]; then
             cp docs/reports/latest/incremental.html docs/reports/index.html
           elif [ -f docs/reports/latest/current.html ]; then
             cp docs/reports/latest/current.html docs/reports/index.html
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          python3 scripts/gen_daily_index.py
+          python3 scripts/gen_archive.py
+          python3 scripts/gen_feed.py
+          python3 scripts/build_trends.py
 
-          # ── daily 保鲜 ──────────────────────────────────────────────
-          # 原实现有两个缺陷，已修正：
-          #   1) 用 stat -c %Y 判断过期 → CI 每次 fresh checkout，mtime 恒为当前时间，
-          #      判断永远不成立，daily.html 会长期停留在某次历史快照；
-          #   2) 用 current.html 覆盖 daily.html → 「当日汇总」页会显示成「当前榜单」，
-          #      报告类型和生成时间都对不上，属于内容欺骗。
-          # 修正后：从报告内容解析生成时间判断是否过期，过期则真实补生成一份当日汇总。
-          need_daily=0
-          if [ ! -f docs/reports/latest/daily.html ]; then
-            need_daily=1
-            echo "daily.html 不存在，需生成"
-          elif ! python3 scripts/check_daily_freshness.py; then
-            # 从报告正文提取生成时间判断是否过期（不能用 stat 的 mtime，CI 每次都是
-            # fresh checkout，mtime 恒为当前时间）。
-            # 必须写成 if/elif 的条件：本步骤开头有 set -e，若先直接调用再取 $?，
-            # 脚本返回 1（语义是"需要补生成"）会被 set -e 判定为失败并立刻终止整个步骤。
-            need_daily=1
-          fi
-
-          if [ "$need_daily" -ne 0 ]; then
-            # 关闭调度覆盖，强制以 daily 模式跑一次，生成真正的当日汇总
-            echo "补生成当日汇总（SCHEDULE_ENABLED=false REPORT_MODE=daily）"
-            SCHEDULE_ENABLED=false REPORT_MODE=daily uv run python -m trendradar
-            cp -r output/html/. docs/reports/
-            python3 scripts/gen_daily_index.py
-            python3 scripts/gen_archive.py
-          fi
-
-          # 本步骤到此为止，不再向 master 提交任何东西。
-          # 报告已迁到 reports 分支（Pages 发布源），由下面的 Sync 步骤提交。
-          # 这里不能留 git add docs/reports/ —— master 的 .gitignore 已忽略该目录，
-          # 在 set -e 下 `git add` 会因 "pathspec did not match" 直接终止整个步骤。
+          # Service Worker 缓存名带上构建版本（master 提交），静态壳变了老用户也能更新
+          sed -i "s/__SW_BUILD__/${GITHUB_SHA::12}/" docs/sw.js
           echo "报告已就绪于 docs/reports/，等待 Sync 步骤提交到 reports 分支"
 
+      # 无论后续是否失败都保存状态：抓取已经写进库的记录和 once 执行记录
+      # 必须留给下一轮（否则下一轮会在同一窗口重复推送）。
+      - name: Save cross-run state (SQLite)
+        if: always() && (steps.crawl.outcome == 'success' || steps.crawl.outcome == 'failure') && hashFiles('output/news/*.db', 'output/rss/*.db', 'output/ai_cache.db') != ''
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            output/news
+            output/rss
+            output/ai_cache.db
+          key: hnr-state-v1-${{ github.run_id }}-${{ github.run_attempt }}
+
       # ── 提交到 reports 分支（Pages 发布源）─────────────────────────────
-      # Pages 现在从 reports 分支根目录读取，这一步就是网站的发布动作。
-      #
-      # 为什么走 Git Data API 而不是 git commit/push：上面只是把 reports 分支
-      # clone 到了 docs/reports/，工作副本的 git 元数据仍指向 master，没法直接
-      # 提交到 reports 分支。脚本会先在本地算出每个文件的 git blob sha，与分支
-      # 当前内容比对，只上传真正变化的文件（通常几份快照约 2 MB），未变化的由
-      # base_tree 原样保留；retention 清掉的旧快照用 sha=null 删除。
-      #
-      # 这里是网站更新的关键路径，因此**不设** continue-on-error：同步失败必须
-      # 让 workflow 失败并触发末尾的 Notify on failure，而不是静默跳过。
+      # 孤儿提交 + git push --force-with-lease=reports:<REPORTS_BASE_OID>：
+      # 只有远端仍是本次克隆时的提交才会更新；被并发运行抢先时脚本会合并对方的快照后重试，
+      # 不会再删掉别的运行刚发布的内容（审计 3.1）。
+      # 这里是网站更新的关键路径，不设 continue-on-error。
       - name: Sync docs/ to reports branch
-        if: success()
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python3 scripts/sync_reports_branch.py --from-dir=docs
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/sync_reports_branch.py --from-dir=docs \
+            --repo-dir=/tmp/pages-content --expect-oid="$REPORTS_BASE_OID"
 
       # --------------------------------------------------------------------------------
       # ☁️ CLOUDFLARE PAGES DEPLOY / 部署到 Cloudflare Pages（可选）
       # --------------------------------------------------------------------------------
-      # 将爬虫生成的 index.html 自动部署到 Cloudflare Pages，国内访问比 GitHub Pages 更快。
-      # 仅当下面三个 Secrets 均已配置时才会执行，缺任意一个则自动跳过，不影响其它流程：
+      # 部署与 GitHub Pages 相同的完整站点（docs/：静态壳 + 全部报告），
+      # 旧实现只部署爬虫生成的单页 index.html，不是站点（审计 4.9）。
+      # 仅当下面三个 Secrets 均已配置时才会执行：
       #   - CLOUDFLARE_API_TOKEN     权限：Account → Cloudflare Pages → Edit
       #   - CLOUDFLARE_ACCOUNT_ID    Cloudflare 账户 ID
       #   - CLOUDFLARE_PROJECT_NAME  Cloudflare Pages 项目名（需提前在 Dashboard 创建）
-      # 配置教程详见 README「自动部署到 Cloudflare Pages」章节。
       # --------------------------------------------------------------------------------
       - name: Check Cloudflare config
-        if: success()
         id: cf_check
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -257,31 +264,42 @@ jobs:
             echo "ℹ️ 未配置 Cloudflare Secrets，跳过 Cloudflare Pages 部署"
           fi
 
-      - name: Prepare Cloudflare Pages assets
-        if: success() && steps.cf_check.outputs.enabled == 'true'
-        run: |
-          if [ ! -f index.html ]; then
-            echo "❌ 未找到 index.html，请确认爬虫已生成网页报告"
-            exit 1
-          fi
-          rm -rf cloudflare_dist
-          mkdir -p cloudflare_dist
-          cp index.html cloudflare_dist/index.html
-
       - name: Deploy to Cloudflare Pages
-        if: success() && steps.cf_check.outputs.enabled == 'true'
-        uses: cloudflare/wrangler-action@v3
+        if: steps.cf_check.outputs.enabled == 'true'
+        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3.15.0
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy cloudflare_dist --project-name=${{ secrets.CLOUDFLARE_PROJECT_NAME }}
+          command: pages deploy docs --project-name=${{ secrets.CLOUDFLARE_PROJECT_NAME }}
 
+      # 失败或被取消（含超时）都告警。NTFY_TOPIC 未配置时明确跳过，
+      # 绝不 POST 到服务器根路径；发送失败要在日志里留下错误，而不是 `|| true` 吞掉。
       - name: Notify on failure
-        if: failure()
-        # NTFY_TOPIC 继承作业级 env
+        if: failure() || cancelled()
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_SERVER_URL: ${{ secrets.NTFY_SERVER_URL }}
+          NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          JOB_STATUS: ${{ job.status }}
         run: |
-          curl -s -X POST "https://ntfy.sh/$NTFY_TOPIC" \
-            -H "Title: 🚨 雷达故障告警" \
-            -H "Tags: rotating_light" \
-            -H "Priority: high" \
-            -d "Get Hot News 运行失败于 $(TZ=Asia/Shanghai date '+%m-%d %H:%M')。请查看 Actions 日志: https://github.com/${{ github.repository }}/actions" || true
+          set -uo pipefail
+          if [ -z "${NTFY_TOPIC:-}" ]; then
+            echo "::warning::NTFY_TOPIC 未配置，跳过故障告警"
+            exit 0
+          fi
+          server="${NTFY_SERVER_URL:-https://ntfy.sh}"
+          server="${server%/}"
+          args=(-sS --fail-with-body --max-time 20 -X POST "${server}/${NTFY_TOPIC}"
+                -H "Title: Hot News Radar alert"
+                -H "Tags: rotating_light"
+                -H "Priority: high")
+          if [ -n "${NTFY_TOKEN:-}" ]; then
+            args+=(-H "Authorization: Bearer ${NTFY_TOKEN}")
+          fi
+          msg="Get Hot News 运行${JOB_STATUS}于 $(TZ=Asia/Shanghai date '+%m-%d %H:%M')（北京时间）。日志: ${RUN_URL}"
+          if ! out="$(curl "${args[@]}" -d "$msg" 2>&1)"; then
+            echo "::error::ntfy 告警发送失败（${server}）：${out}"
+            exit 1
+          fi
+          echo "已发送故障告警到 ${server}/<topic>"
