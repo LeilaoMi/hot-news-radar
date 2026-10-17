@@ -5,6 +5,7 @@ v2.0.0: 仅支持 SQLite 数据库，移除 TXT 文件支持
 新存储结构：output/{type}/{date}.db
 """
 
+import logging
 import re
 import sqlite3
 from pathlib import Path
@@ -14,7 +15,11 @@ from datetime import datetime
 import yaml
 
 from ..utils.errors import FileParseError, DataNotFoundError
+from ..utils.paths import get_data_dir, get_db_path, resolve_project_root
 from .cache_service import get_cache
+
+
+logger = logging.getLogger(__name__)
 
 
 class ParserService:
@@ -27,17 +32,18 @@ class ParserService:
         Args:
             project_root: 项目根目录，默认为当前目录的父目录
         """
-        if project_root is None:
-            current_file = Path(__file__)
-            self.project_root = current_file.parent.parent.parent
-        else:
-            self.project_root = Path(project_root)
+        self.project_root = resolve_project_root(project_root)
 
         self.cache = get_cache()
 
         # frequency_words.txt mtime 缓存
         self._freq_words_cache: Optional[List[Dict]] = None
         self._freq_words_mtime: float = 0.0
+
+    @property
+    def data_dir(self) -> Path:
+        """数据根目录（尊重 config.yaml 的 storage.local.data_dir）"""
+        return get_data_dir(self.project_root)
 
     @staticmethod
     def clean_title(title: str) -> str:
@@ -74,7 +80,7 @@ class ParserService:
             数据库文件路径，如果不存在则返回 None
         """
         date_str = self.get_date_folder_name(date)
-        db_path = self.project_root / "output" / db_type / f"{date_str}.db"
+        db_path = get_db_path(self.data_dir, db_type, date_str)
         if db_path.exists():
             return db_path
         return None
@@ -115,7 +121,7 @@ class ParserService:
                 return self._read_rss_from_sqlite(cursor, platform_ids, all_titles, id_to_name, all_timestamps)
 
         except Exception as e:
-            print(f"Warning: 从 SQLite 读取数据失败: {e}")
+            logger.warning("从 SQLite 读取数据失败: %s", e)
             return None
         finally:
             if 'conn' in locals():
@@ -432,7 +438,7 @@ class ParserService:
         Returns:
             日期字符串列表（YYYY-MM-DD 格式，降序排列）
         """
-        db_dir = self.project_root / "output" / db_type
+        db_dir = self.data_dir / db_type
         if not db_dir.exists():
             return []
 

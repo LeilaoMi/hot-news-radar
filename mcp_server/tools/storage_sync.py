@@ -5,6 +5,7 @@
 实现从远程存储拉取数据到本地、获取存储状态、列出可用日期等功能。
 """
 
+import logging
 import os
 import re
 from pathlib import Path
@@ -13,7 +14,15 @@ from typing import Dict, List, Optional
 
 import yaml
 
-from ..utils.errors import MCPError
+from ..utils.errors import MCPError, InvalidParameterError
+from ..utils.paths import get_data_dir, get_db_path, resolve_project_root
+from ..utils.redact import safe_error
+
+
+logger = logging.getLogger(__name__)
+
+# sync_from_remote 的 days 上限，防止超大值让线程长时间空转
+MAX_SYNC_DAYS = 365
 
 
 class StorageSyncTools:
@@ -26,11 +35,7 @@ class StorageSyncTools:
         Args:
             project_root: 项目根目录
         """
-        if project_root:
-            self.project_root = Path(project_root)
-        else:
-            current_file = Path(__file__)
-            self.project_root = current_file.parent.parent.parent
+        self.project_root = resolve_project_root(project_root)
 
         self._config = None
         self._remote_backend = None
@@ -101,18 +106,18 @@ class StorageSyncTools:
             )
             return self._remote_backend
         except ImportError:
-            print("[存储同步] 远程存储后端需要安装 boto3: pip install boto3")
+            logger.warning("[存储同步] 远程存储后端需要安装 boto3: pip install boto3")
             return None
         except Exception as e:
-            print(f"[存储同步] 创建远程后端失败: {e}")
+            logger.warning("[存储同步] 创建远程后端失败: %s", safe_error(e, self._get_remote_config()))
             return None
 
     def _get_local_data_dir(self) -> Path:
         """获取本地数据目录"""
         storage_config = self._get_storage_config()
-        local_config = storage_config.get("local", {})
-        data_dir = local_config.get("data_dir", "output")
-        return self.project_root / data_dir
+        local_config = storage_config.get("local", {}) or {}
+        data_dir = local_config.get("data_dir") or "output"
+        return get_data_dir(self.project_root, data_dir=data_dir)
 
     def _parse_date_folder_name(self, folder_name: str) -> Optional[datetime]:
         """
@@ -210,6 +215,27 @@ class StorageSyncTools:
                     total_size += item.stat().st_size
         return total_size
 
+    @staticmethod
+    def _download_db(remote_backend, local_dir: Path, db_type: str, date_str: str) -> Path:
+        """下载 {db_type}/{date}.db 到 {local_dir}/{db_type}/{date}.db（先写临时文件再原子替换）"""
+        target = get_db_path(local_dir, db_type, date_str)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(target.name + ".part")
+        try:
+            remote_backend.s3_client.download_file(
+                remote_backend.bucket_name,
+                f"{db_type}/{date_str}.db",
+                str(tmp),
+            )
+            os.replace(tmp, target)
+        finally:
+            if tmp.exists():
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+        return target
+
     def sync_from_remote(self, days: int = 7) -> Dict:
         """
         从远程存储拉取数据到本地
@@ -221,6 +247,16 @@ class StorageSyncTools:
             同步结果字典
         """
         try:
+            try:
+                days = int(days)
+            except (TypeError, ValueError):
+                raise InvalidParameterError("days 必须是整数", suggestion=f"取值范围 0-{MAX_SYNC_DAYS}")
+            if days < 0 or days > MAX_SYNC_DAYS:
+                raise InvalidParameterError(
+                    f"days 超出范围: {days}",
+                    suggestion=f"取值范围 0-{MAX_SYNC_DAYS}"
+                )
+
             # 检查远程配置
             if not self._has_remote_config():
                 return {
@@ -272,29 +308,29 @@ class StorageSyncTools:
             skipped_dates = []
             failed_dates = []
 
+            remote_config = self._get_remote_config()
             for date_str in target_dates:
                 # 检查本地是否已存在
                 if date_str in local_dates:
                     skipped_dates.append(date_str)
                     continue
 
-                # 拉取单个日期
+                # 拉取单个日期：写入路径必须与读取路径一致
+                # （{data_dir}/news/{date}.db，见 parser_service._get_db_path / trendradar LocalStorageBackend）
                 try:
-                    local_date_dir = local_dir / date_str
-                    local_db_path = local_date_dir / "news.db"
-                    remote_key = f"news/{date_str}.db"
-
-                    local_date_dir.mkdir(parents=True, exist_ok=True)
-                    remote_backend.s3_client.download_file(
-                        remote_backend.bucket_name,
-                        remote_key,
-                        str(local_db_path)
-                    )
+                    self._download_db(remote_backend, local_dir, "news", date_str)
                     synced_dates.append(date_str)
-                    print(f"[存储同步] 已拉取: {date_str}")
+                    logger.info("[存储同步] 已拉取: %s", date_str)
                 except Exception as e:
-                    failed_dates.append({"date": date_str, "error": str(e)})
-                    print(f"[存储同步] 拉取失败 ({date_str}): {e}")
+                    failed_dates.append({"date": date_str, "error": safe_error(e, remote_config)})
+                    logger.warning("[存储同步] 拉取失败 (%s): %s", date_str, safe_error(e, remote_config))
+                    continue
+
+                # RSS 数据库是可选的（远程可能没有），失败不影响 news 结果
+                try:
+                    self._download_db(remote_backend, local_dir, "rss", date_str)
+                except Exception as e:
+                    logger.info("[存储同步] RSS 未同步 (%s): %s", date_str, safe_error(e, remote_config))
 
             return {
                 "success": True,
@@ -326,7 +362,7 @@ class StorageSyncTools:
                 "success": False,
                 "error": {
                     "code": "INTERNAL_ERROR",
-                    "message": str(e)
+                    "message": safe_error(e, self._get_remote_config())
                 }
             }
 
@@ -395,7 +431,7 @@ class StorageSyncTools:
                         remote_status["earliest_date"] = remote_dates[-1] if remote_dates else None
                         remote_status["latest_date"] = remote_dates[0] if remote_dates else None
                     except Exception as e:
-                        remote_status["error"] = str(e)
+                        remote_status["error"] = safe_error(e, self._get_remote_config())
 
             # 拉取配置状态
             pull_config = storage_config.get("pull", {})
@@ -427,7 +463,7 @@ class StorageSyncTools:
                 "success": False,
                 "error": {
                     "code": "INTERNAL_ERROR",
-                    "message": str(e)
+                    "message": safe_error(e, self._get_remote_config())
                 }
             }
 
@@ -503,7 +539,7 @@ class StorageSyncTools:
                                 "count": 0,
                                 "earliest": None,
                                 "latest": None,
-                                "error": str(e)
+                                "error": safe_error(e, self._get_remote_config())
                             }
                     else:
                         data_result["remote"] = {
@@ -542,6 +578,6 @@ class StorageSyncTools:
                 "success": False,
                 "error": {
                     "code": "INTERNAL_ERROR",
-                    "message": str(e)
+                    "message": safe_error(e, self._get_remote_config())
                 }
             }

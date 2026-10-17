@@ -7,21 +7,42 @@ dependencies = [
     "requests==2.33.0",
     "pytz==2026.1",
     "PyYAML==6.0.3",
-    "fastmcp==2.12.5",
-    "websockets==13.1",
+    # MCP：fastmcp 3.x + mcp 1.30（修复 CVE-2025-66416 DNS rebinding、CVE-2026-52869、CVE-2026-59951 等）
+    "fastmcp==3.4.9",
+    "mcp==1.30.0",
     "feedparser==6.0.12",
-    "boto3==1.42.76",
-    "litellm==1.82.6",
-    "json-repair==0.58.6",
+    "boto3==1.43.1",
+    # 安全说明：litellm 1.82.7 / 1.82.8 是供应链投毒的恶意版本（MAL-2026-2144 / GHSA-5mg7-485q-xm76），
+    # 任何情况下都不要使用。1.104.3 为 OSV 无公告、带 GitHub release 的版本；升级时请人工核对 uv.lock 中的版本与 hash。
+    "litellm==1.104.3",
+    "json-repair==0.63.5",
     "tenacity==8.5.0",
 ]
 
 [project.scripts]
 trendradar = "trendradar.__main__:main"
-trendradar-mcp = "mcp_server.server:run_server"
+trendradar-mcp = "mcp_server.server:main"
 
 [dependency-groups]
-dev = []
+dev = [
+    "pytest>=8",
+    "pytest-timeout>=2.3",
+    "ruff==0.17.1",
+]
+
+[tool.uv]
+# 间接依赖的安全下限（pip-audit 公告修复版本）
+constraint-dependencies = [
+    "starlette>=1.3.1",
+    "urllib3>=2.8.0",
+    "aiohttp>=3.14.3",
+    "cryptography>=48.0.1",
+    "anyio>=4.14.2",
+    "fsspec>=2026.6.0",
+    "idna>=3.15",
+    "multidict>=6.9.1",
+    "pygments>=2.20.0",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -36,6 +57,7 @@ pythonpath = ["."]
 # 存储层会打印连接日志，默认捕获不影响断言
 log_cli_level = "WARNING"
 addopts = "-q --strict-markers"
+timeout = 60
 markers = [
     "slow: 耗时较长的测试（默认不跳过）",
 ]

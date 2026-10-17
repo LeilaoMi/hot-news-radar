@@ -16,6 +16,7 @@ import yaml
 from trendradar.core.analyzer import calculate_news_weight as _calculate_news_weight
 
 from ..services.data_service import DataService
+from ..utils.paths import get_config_path
 from ..utils.validators import (
     validate_platforms,
     validate_limit,
@@ -52,11 +53,11 @@ def _get_weight_config() -> Dict:
 
     try:
         # 首次调用时计算路径（之后复用）
-        if _weight_config_path is None:
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            _weight_config_path = os.path.normpath(
-                os.path.join(current_dir, "..", "..", "config", "config.yaml")
-            )
+        # 跟随 --project-root（paths.set_project_root），路径变化时缓存自动失效
+        config_path = str(get_config_path())
+        if config_path != _weight_config_path:
+            _weight_config_path = config_path
+            _weight_config_cache = None
 
         current_mtime = os.path.getmtime(_weight_config_path)
 

@@ -33,8 +33,8 @@ AI 分析功能需要读取项目中的新闻数据才能工作。无论你使�
 如果你熟悉 Git，可以使用以下命令克隆项目：
 
 ```bash
-git clone https://github.com/你的用户名/你的项目名.git
-cd 你的项目名
+git clone https://github.com/LeilaoMi/hot-news-radar.git
+cd hot-news-radar
 ```
 
 **优点**：
@@ -46,13 +46,13 @@ cd 你的项目名
 
 1. **访问 GitHub 项目页面**
 
-   - 项目链接：`https://github.com/你的用户名/你的项目名`
+   - 项目链接：`https://github.com/LeilaoMi/hot-news-radar`（如果你 fork 了本项目，换成你自己的仓库地址）
 
 2. **下载压缩包**
 
    - 点击绿色的 "Code" 按钮
    - 选择 "Download ZIP"
-   - 或直接访问：`https://github.com/你的用户名/你的项目名/archive/refs/heads/master.zip`
+   - 或直接访问：`https://github.com/LeilaoMi/hot-news-radar/archive/refs/heads/master.zip`
 
 
 **注意事项**：
@@ -134,13 +134,13 @@ cd 你的项目名
 
 ### HTTP 模式（可选）
 
-如果需要远程访问或多客户端共享，可以使用 HTTP 模式：
+HTTP 模式适合多客户端共享。**默认只监听本机 `127.0.0.1`**，同一台电脑上的 Cherry Studio 可以直接连接：
 
 #### Windows
 
 双击运行 `start-http.bat`
 
-#### Mac
+#### Mac / Linux
 
 ```bash
 ./start-http.sh
@@ -152,3 +152,44 @@ cd 你的项目名
 类型: streamableHttp
 URL: http://localhost:3333/mcp
 ```
+
+#### 需要局域网 / 远程访问时（务必开启鉴权）
+
+监听非本机地址时**必须**设置 `MCP_AUTH_TOKEN`，否则服务会拒绝启动：
+
+```bash
+# Mac / Linux
+export MCP_AUTH_TOKEN="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
+export MCP_ALLOWED_HOSTS=192.168.1.10      # 客户端访问时用的 IP / 域名
+MCP_HOST=0.0.0.0 ./start-http.sh
+```
+
+```bat
+REM Windows（cmd）
+set MCP_AUTH_TOKEN=请替换为至少16位的随机字符串
+set MCP_ALLOWED_HOSTS=192.168.1.10
+set MCP_HOST=0.0.0.0
+start-http.bat
+```
+
+Cherry Studio 里在 **请求头（Headers）** 中添加：
+
+```
+Authorization: Bearer <你的 MCP_AUTH_TOKEN>
+```
+
+> 🔒 安全提示
+> - 服务会校验 Host / Origin（防 DNS rebinding）。用局域网 IP 或域名访问时，把它加进 `MCP_ALLOWED_HOSTS`，否则会返回 421。
+> - 不需要发送通知 / 触发抓取 / 远程同步时，可设置 `MCP_ENABLE_SIDE_EFFECT_TOOLS=false` 禁用这些工具。
+> - `read_article` 会把文章 URL 发送给第三方服务 `r.jina.ai` 抓取。
+> - 不要把 webhook、token 等密钥写进 git 跟踪的 `config/config.yaml`，请使用环境变量。
+
+### Docker 部署 MCP
+
+```bash
+cd docker
+cp .env.example .env          # 在 .env 中填写 MCP_AUTH_TOKEN（必填）及通知 / S3 密钥
+docker compose up -d --build  # 首次会在本地构建镜像
+```
+
+连接地址：`http://localhost:3333/mcp`（宿主端口可用 `MCP_PORT` 修改），请求头同样需要 `Authorization: Bearer <MCP_AUTH_TOKEN>`。

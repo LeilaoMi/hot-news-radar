@@ -580,7 +580,7 @@ class DataService:
             系统状态字典
         """
         # 获取数据统计
-        output_dir = self.parser.project_root / "output"
+        output_dir = self.parser.data_dir
 
         total_storage = 0
 
@@ -593,20 +593,23 @@ class DataService:
                 if item.is_file():
                     total_storage += item.stat().st_size
 
-        # 读取版本信息
-        version_file = self.parser.project_root / "version"
-        version = "unknown"
-        if version_file.exists():
-            try:
-                with open(version_file, "r") as f:
-                    version = f.read().strip()
-            except (OSError, ValueError):
-                pass  # 读取失败时保持 unknown，不影响健康检查结果
+        # 读取版本信息：直接用包内版本号（Docker 镜像里没有 version 文件）
+        try:
+            from trendradar import __version__ as trendradar_version
+        except ImportError:
+            trendradar_version = "unknown"
+        try:
+            from mcp_server import __version__ as mcp_version
+        except ImportError:
+            mcp_version = "unknown"
+        version = trendradar_version
 
         return {
             "system": {
                 "version": version,
-                "project_root": str(self.parser.project_root)
+                "mcp_version": mcp_version,
+                # 不返回服务器绝对路径，只给目录名，避免信息泄露
+                "data_dir": self.parser.data_dir.name,
             },
             "data": {
                 "total_storage": f"{total_storage / 1024 / 1024:.2f} MB",

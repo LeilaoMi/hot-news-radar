@@ -8,11 +8,13 @@
 from datetime import datetime
 from typing import List, Optional, Union
 import os
+import sys
 import json
 import yaml
 import ast
 
 from .errors import InvalidParameterError
+from .paths import get_config_path
 from .date_parser import DateParser
 
 
@@ -170,11 +172,11 @@ def get_supported_platforms() -> List[str]:
     global _platforms_cache, _platforms_config_mtime, _platforms_config_path
 
     try:
-        if _platforms_config_path is None:
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            _platforms_config_path = os.path.normpath(
-                os.path.join(current_dir, "..", "..", "config", "config.yaml")
-            )
+        # 跟随 --project-root（paths.set_project_root），路径变化时缓存自动失效
+        config_path = str(get_config_path())
+        if config_path != _platforms_config_path:
+            _platforms_config_path = config_path
+            _platforms_cache = None
 
         current_mtime = os.path.getmtime(_platforms_config_path)
 
@@ -189,7 +191,7 @@ def get_supported_platforms() -> List[str]:
             _platforms_config_mtime = current_mtime
             return _platforms_cache
     except Exception as e:
-        print(f"警告：无法加载平台配置: {e}")
+        print(f"警告：无法加载平台配置: {e}", file=sys.stderr)
         return []
 
 
@@ -240,7 +242,7 @@ def validate_platforms(platforms: Optional[Union[List[str], str]]) -> List[str]:
 
     # 如果配置加载失败（supported_platforms为空），允许所有平台通过
     if not supported_platforms:
-        print("警告：平台配置未加载，跳过平台验证")
+        print("警告：平台配置未加载，跳过平台验证", file=sys.stderr)
         return platforms
 
     # 验证每个平台是否在配置中

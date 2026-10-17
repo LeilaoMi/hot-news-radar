@@ -4,6 +4,7 @@
 提供模糊搜索、链接查询、历史相关新闻检索等高级搜索功能。
 """
 
+import sys
 import re
 from collections import Counter
 from datetime import datetime, timedelta
@@ -597,7 +598,7 @@ class SearchTools:
                     pass
                 except Exception as e:
                     # 记录错误但继续处理其他日期
-                    print(f"Warning: 处理日期 {current_date.strftime('%Y-%m-%d')} 时出错: {e}")
+                    print(f"Warning: 处理日期 {current_date.strftime('%Y-%m-%d')} 时出错: {e}", file=sys.stderr)
 
                 # 移动到下一天
                 current_date += timedelta(days=1)

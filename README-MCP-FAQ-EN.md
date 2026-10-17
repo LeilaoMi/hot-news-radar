@@ -6,7 +6,7 @@
 
 # TrendRadar MCP Tool Usage Q&A
 
-> AI Query Guide - How to Use News Trend Analysis Tools Through Natural Conversation (v3.1.7)
+> AI Query Guide - How to Use News Trend Analysis Tools Through Natural Conversation (MCP Server v4.2.0, 27 tools)
 
 ---
 
@@ -38,8 +38,25 @@
 | | `list_available_dates` | List available dates (local/remote) |
 | **Article** | `read_article` | Read single article content (Markdown format) |
 | | `read_articles_batch` | Batch read multiple articles (max 5) |
-| **Notification** | `get_notification_channels` | Get all configured notification channels and their status |
+| **Notification** | `get_channel_format_guide` | Get per-channel formatting guide (generate well-formatted messages before sending) |
+| | `get_notification_channels` | Get all configured notification channels and their status |
 | | `send_notification` | Send messages to configured notification channels (auto format conversion) |
+
+---
+
+## 🔒 Security Notes (read before using HTTP mode)
+
+| Item | Default | How to change |
+|------|---------|---------------|
+| **Bind address** | HTTP mode listens on `127.0.0.1` only | `--host 0.0.0.0` or `MCP_HOST=0.0.0.0 ./start-http.sh` |
+| **Auth** | When `MCP_AUTH_TOKEN` is set, every request needs `Authorization: Bearer <token>`. **Required when binding a non-loopback address — the server refuses to start otherwise** (also required for Docker) | `export MCP_AUTH_TOKEN="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"` |
+| **Host / Origin check** | Always on (DNS-rebinding protection): only `127.0.0.1` / `localhost` / `::1` and allow-listed hosts are accepted | Set `MCP_ALLOWED_HOSTS=mcp.example.com,192.168.1.10` when accessing via a domain/LAN IP; browser origins via `MCP_ALLOWED_ORIGINS` |
+| **Side-effect tools** | `send_notification` / `trigger_crawl` / `sync_from_remote` are registered | `MCP_ENABLE_SIDE_EFFECT_TOOLS=false` removes them |
+| **Error messages** | Webhook URLs, bot tokens, passwords and S3 keys are masked before errors reach the client | — |
+| **stdio mode** | stdout carries JSON-RPC only; banner and logs go to stderr | — |
+| **Third parties** | `read_article(s)` sends the article URL to `r.jina.ai` | Optional `JINA_API_KEY` for higher limits |
+
+> Keep secrets (webhooks, tokens, S3 keys) in environment variables / `docker/.env` / GitHub Secrets — never in the git-tracked `config/config.yaml`.
 
 ---
 
@@ -580,6 +597,7 @@ For each component, you'll get:
 **Can be adjusted:**
 
 - If GitHub access is slow, say "check version updates, use proxy http://127.0.0.1:10801"
+- For security, only loopback proxies (127.0.0.1 / localhost / ::1) or the `advanced.crawler.default_proxy` from `config.yaml` are accepted
 
 ---
 
@@ -590,7 +608,7 @@ For each component, you'll get:
 - "Please crawl current Toutiao news" (temporary query)
 - "Help me fetch latest news from Zhihu and Weibo and save" (persistent)
 - "Trigger a crawl and save data" (persistent)
-- "Get real-time data from 36Kr but don't save" (temporary query)
+- "Get real-time data from Wallstreetcn but don't save" (temporary query)
 
 **Two modes:**
 
@@ -763,7 +781,9 @@ Users often use natural language like "this week", "last 7 days" to express date
 **Notes:**
 
 - 5-second interval between requests (built-in rate control)
-- Uses Jina AI Reader free service (100 RPM limit)
+- Uses Jina AI Reader free service (100 RPM limit); set `JINA_API_KEY` for higher limits
+- **Privacy**: the article URL is sent to the third-party service `r.jina.ai`, whose servers fetch the page
+- Batch reads are capped at ~120 s total; remaining articles are marked as not read
 - Some paywalled/login-required pages may not be fully accessible
 
 ---

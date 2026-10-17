@@ -1,9 +1,15 @@
-FROM python:3.12-slim-bookworm
+# 基础镜像固定版本 + digest，保证构建可复现（更新时请同时更新 tag 与 digest）
+FROM python:3.12.15-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258
+
+LABEL org.opencontainers.image.title="trendradar-mcp" \
+      org.opencontainers.image.source="https://github.com/LeilaoMi/hot-news-radar" \
+      org.opencontainers.image.licenses="GPL-3.0-only" \
+      org.opencontainers.image.description="TrendRadar MCP Server（hot-news-radar fork）"
 
 WORKDIR /app
 
-# 从官方镜像拷贝 uv 二进制
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+# 从官方镜像拷贝 uv 二进制（固定版本 + digest）
+COPY --from=ghcr.io/astral-sh/uv:0.13.0@sha256:cdc6093146eb3ff6a40107b38f008b789e050e77ad87865e381d9917da55a168 /uv /uvx /bin/
 
 # 先安装依赖（利用 Docker 层缓存）
 COPY pyproject.toml uv.lock ./
@@ -13,21 +19,39 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # 复制 MCP 服务器代码和 trendradar 模块
 COPY mcp_server/ ./mcp_server/
 COPY trendradar/ ./trendradar/
+COPY LICENSE ./LICENSE
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev
 
 ENV PATH="/app/.venv/bin:$PATH"
 
-# 创建必要目录
-RUN mkdir -p /app/config /app/output
+COPY docker/run-as-app.sh /usr/local/bin/run-as-app.tmp
+
+# 创建必要目录与非 root 用户
+RUN sed -i 's/\r$//' /usr/local/bin/run-as-app.tmp && \
+    mv /usr/local/bin/run-as-app.tmp /usr/local/bin/run-as-app && \
+    chmod +x /usr/local/bin/run-as-app && \
+    mkdir -p /app/config /app/output && \
+    groupadd --system --gid 10001 app && \
+    useradd --system --uid 10001 --gid app --home-dir /app --no-create-home --shell /usr/sbin/nologin app && \
+    chown -R app:app /app/output
 
 ENV PYTHONUNBUFFERED=1 \
     CONFIG_PATH=/app/config/config.yaml \
-    FREQUENCY_WORDS_PATH=/app/config/frequency_words.txt
+    FREQUENCY_WORDS_PATH=/app/config/frequency_words.txt \
+    APP_UID=10001 \
+    APP_GID=10001 \
+    FASTMCP_SHOW_SERVER_BANNER=false
 
-# MCP HTTP 服务端口（默认 3333，可通过环境变量 MCP_PORT 覆盖）
-ENV MCP_PORT=3333
+# 容器内固定监听 3333；宿主机端口由 compose 的 MCP_PORT 决定（"${MCP_HOST}:${MCP_PORT}:3333"）
+# 容器内必须监听 0.0.0.0 才能被端口映射访问，因此必须设置 MCP_AUTH_TOKEN（否则服务拒绝启动）
 EXPOSE 3333
 
-# 启动 MCP 服务器（HTTP 模式）
-CMD sh -c "python -m mcp_server.server --transport http --host 0.0.0.0 --port ${MCP_PORT}"
+# 健康检查：TCP 端口可连接即视为存活（MCP 端点需要鉴权，不适合直接 HTTP 探测）
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD ["python", "-c", "import socket; socket.create_connection(('127.0.0.1', 3333), 3).close()"]
+
+# 以 root 启动仅用于修正 /app/output 属主，随后降权为 app（uid 10001）
+ENTRYPOINT ["/usr/local/bin/run-as-app"]
+# exec 形式：SIGTERM 直接送达 python 进程，docker stop 可以优雅退出
+CMD ["python", "-m", "mcp_server.server", "--transport", "http", "--host", "0.0.0.0", "--port", "3333"]

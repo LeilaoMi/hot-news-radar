@@ -1,15 +1,36 @@
 """
-TrendRadar MCP Server - FastMCP 2.0 实现
+TrendRadar MCP Server - FastMCP 实现
 
-使用 FastMCP 2.0 提供生产级 MCP 工具服务器。
-支持 stdio 和 HTTP 两种传输模式。
+使用 FastMCP 提供 MCP 工具服务器，支持 stdio 和 HTTP 两种传输模式。
+
+安全默认值：
+- HTTP 默认只监听 127.0.0.1；监听非回环地址时必须设置 MCP_AUTH_TOKEN，否则拒绝启动；
+- HTTP 始终校验 Host / Origin（防 DNS rebinding）；
+- stdio 模式下 stdout 只输出 JSON-RPC，所有日志 / print 都重定向到 stderr。
 """
 
 import asyncio
 import json
+import logging
+import os
+import sys
 from typing import List, Optional, Dict, Union
 
 from fastmcp import FastMCP
+
+from . import __version__
+from .security import (
+    DEFAULT_HTTP_HOST,
+    DEFAULT_HTTP_PATH,
+    DEFAULT_HTTP_PORT,
+    ENV_ENABLE_SIDE_EFFECT_TOOLS,
+    SIDE_EFFECT_TOOLS,
+    InsecureBindError,
+    env_flag,
+    resolve_http_security,
+    http_transport_kwargs,
+)
+from .utils import paths as _paths
 
 from .tools.data_query import DataQueryTools
 from .tools.analytics import AnalyticsTools
@@ -23,8 +44,10 @@ from .utils.date_parser import DateParser
 from .utils.errors import MCPError
 
 
-# 创建 FastMCP 2.0 应用
-mcp = FastMCP('trendradar-news')
+logger = logging.getLogger("mcp_server")
+
+# 创建 FastMCP 应用（version 让客户端看到的 serverInfo 是 MCP Server 自己的版本号）
+mcp = FastMCP('trendradar-news', version=__version__)
 
 # 全局工具实例（在第一次请求时初始化）
 _tools_instances = {}
@@ -33,6 +56,9 @@ _tools_instances = {}
 def _get_tools(project_root: Optional[str] = None):
     """获取或创建工具实例（单例模式）"""
     if not _tools_instances:
+        if project_root:
+            # 让模块级的配置读取（平台校验、权重配置）也跟随 --project-root
+            _paths.set_project_root(project_root)
         _tools_instances['data'] = DataQueryTools(project_root)
         _tools_instances['analytics'] = AnalyticsTools(project_root)
         _tools_instances['search'] = SearchTools(project_root)
@@ -954,7 +980,8 @@ async def read_article(
         - read_article(url="https://example.com/news/123")
 
     Note:
-        - 使用 Jina AI Reader 免费服务（100 RPM 限制）
+        - 使用 Jina AI Reader 免费服务（100 RPM 限制）；可设置环境变量 JINA_API_KEY 提升限额
+        - 隐私提示：URL 会发送给第三方服务 r.jina.ai，由其抓取页面
         - 每次请求间隔 5 秒（内置速率控制）
         - 部分付费墙/登录墙页面可能无法完整获取
     """
@@ -1019,7 +1046,7 @@ async def get_channel_format_guide(channel: Optional[str] = None) -> str:
     从而生成最佳排版效果的消息内容。
 
     各渠道格式差异概览：
-    - 飞书：支持 **粗体**、<font color>彩色文本、[链接](url)、--- 分割线
+    - 飞书：纯文本消息（Markdown 符号与 <font> 标签会被剥离，链接保留为“文本 URL”）
     - 钉钉：支持 ### 标题、**粗体**、> 引用、--- 分割线，不支持颜色
     - 企业微信：仅支持 **粗体**、[链接](url)、> 引用，不支持标题和分割线
     - Telegram：自动转为 HTML，支持粗体/斜体/删除线/代码/链接/引用块
@@ -1078,7 +1105,7 @@ async def send_notification(
     向已配置的通知渠道发送消息
 
     接受 markdown 格式内容，内部自动适配各渠道的格式要求和限制：
-    - 飞书：Markdown 卡片消息（支持 **粗体**、<font color>彩色文本、[链接](url)、---）
+    - 飞书：纯文本消息（自动剥离 **、<font>、# 等格式符号，链接转为“文本 URL”）
     - 钉钉：Markdown（自动降级标题为 ###、剥离 <font> 标签和删除线）
     - 企业微信：Markdown（自动剥离 # 标题、---、<font> 标签、删除线）
     - Telegram：HTML（自动转换 **→<b>、*→<i>、~~→<s>、>→<blockquote>）
@@ -1114,11 +1141,120 @@ async def send_notification(
 
 # ==================== 启动入口 ====================
 
+_TOOL_GROUPS = [
+    ("日期解析工具（推荐优先调用）", ["resolve_date_range"]),
+    ("基础数据查询", ["get_latest_news", "get_news_by_date", "get_trending_topics"]),
+    ("RSS 数据查询", ["get_latest_rss", "search_rss", "get_rss_feeds_status"]),
+    ("智能检索工具", ["search_news", "find_related_news"]),
+    ("高级数据分析", [
+        "analyze_topic_trend", "analyze_data_insights", "analyze_sentiment",
+        "aggregate_news", "compare_periods", "generate_summary_report",
+    ]),
+    ("配置与系统管理", ["get_current_config", "get_system_status", "check_version", "trigger_crawl"]),
+    ("存储同步工具", ["sync_from_remote", "get_storage_status", "list_available_dates"]),
+    ("文章内容读取", ["read_article", "read_articles_batch"]),
+    ("通知推送工具", ["get_channel_format_guide", "get_notification_channels", "send_notification"]),
+]
+
+
+def _eprint(*args, **kwargs) -> None:
+    """日志输出到 stderr（stdio 模式下 stdout 是 JSON-RPC 通道）"""
+    print(*args, file=sys.stderr, **kwargs)
+
+
+def _configure_logging() -> None:
+    root = logging.getLogger()
+    if not any(isinstance(h, logging.StreamHandler) for h in root.handlers):
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        root.addHandler(handler)
+    if root.level == logging.NOTSET or root.level > logging.INFO:
+        root.setLevel(logging.INFO)
+
+
+def apply_tool_policy(enable_side_effect_tools: Optional[bool] = None) -> List[str]:
+    """按 MCP_ENABLE_SIDE_EFFECT_TOOLS 移除有副作用的工具，返回被移除的工具名"""
+    if enable_side_effect_tools is None:
+        enable_side_effect_tools = env_flag(ENV_ENABLE_SIDE_EFFECT_TOOLS, default=True)
+    removed = []
+    if not enable_side_effect_tools:
+        for name in SIDE_EFFECT_TOOLS:
+            try:
+                mcp.remove_tool(name)
+                removed.append(name)
+            except Exception:  # 已移除 / 不存在
+                pass
+    return removed
+
+
+def _isolate_stdout_for_stdio():
+    """stdio 模式：把进程级 stdout（fd 1）重定向到 stderr，JSON-RPC 走单独复制出来的句柄。
+
+    这样无论是本项目还是 trendradar 内部、第三方库、子进程的 print，都不会混进协议流。
+    返回 JSON-RPC 输出用的 anyio 异步文件。
+    """
+    import io
+
+    import anyio
+
+    sys.stdout.flush()
+    protocol_fd = os.dup(1)
+    os.dup2(2, 1)
+    sys.stdout = sys.stderr
+    protocol_out = io.TextIOWrapper(
+        os.fdopen(protocol_fd, "wb", buffering=0), encoding="utf-8", write_through=True
+    )
+    return anyio.wrap_file(protocol_out)
+
+
+def _run_stdio() -> None:
+    import functools
+
+    import fastmcp.server.mixins.transport as _transport
+    from mcp.server.stdio import stdio_server
+
+    protocol_stdout = _isolate_stdout_for_stdio()
+    # fastmcp 内部用 stdio_server() 默认取 sys.stdout；这里把协议输出固定到复制出来的真实 stdout
+    _transport.stdio_server = functools.partial(stdio_server, stdout=protocol_stdout)
+    mcp.run(transport='stdio', show_banner=False)
+
+
+def _print_banner(transport: str, host: str, port: int, project_root: Optional[str],
+                  auth_enabled: bool, removed_tools: List[str]) -> None:
+    _eprint()
+    _eprint("=" * 60)
+    _eprint(f"  TrendRadar MCP Server v{__version__}")
+    _eprint("=" * 60)
+    _eprint(f"  传输模式: {transport.upper()}")
+    if transport == 'stdio':
+        _eprint("  协议: MCP over stdio（stdout 仅输出 JSON-RPC，日志在 stderr）")
+    else:
+        _eprint(f"  服务器监听: http://{host}:{port}{DEFAULT_HTTP_PATH}")
+        _eprint(f"  鉴权: {'Bearer Token（MCP_AUTH_TOKEN）' if auth_enabled else '未启用（仅本机回环地址可用）'}")
+        _eprint("  Host/Origin 校验: 已启用（防 DNS rebinding）")
+    _eprint(f"  项目目录: {project_root or '默认（代码所在目录）'}")
+    if removed_tools:
+        _eprint(f"  已禁用的副作用工具: {', '.join(removed_tools)}")
+    _eprint()
+    _eprint("  已注册的工具:")
+    idx = 0
+    for group, names in _TOOL_GROUPS:
+        visible = [n for n in names if n not in removed_tools]
+        if not visible:
+            continue
+        _eprint(f"    === {group} ===")
+        for n in visible:
+            _eprint(f"    {idx:>2}. {n}")
+            idx += 1
+    _eprint("=" * 60)
+    _eprint()
+
+
 def run_server(
     project_root: Optional[str] = None,
     transport: str = 'stdio',
-    host: str = '0.0.0.0',
-    port: int = 3333
+    host: str = DEFAULT_HTTP_HOST,
+    port: int = DEFAULT_HTTP_PORT
 ):
     """
     启动 MCP 服务器
@@ -1126,102 +1262,53 @@ def run_server(
     Args:
         project_root: 项目根目录路径
         transport: 传输模式，'stdio' 或 'http'
-        host: HTTP模式的监听地址，默认 0.0.0.0
-        port: HTTP模式的监听端口，默认 3333
+        host: HTTP 模式的监听地址，默认 127.0.0.1（监听非回环地址必须设置 MCP_AUTH_TOKEN）
+        port: HTTP 模式的监听端口，默认 3333
     """
+    _configure_logging()
+
+    if transport not in ('stdio', 'http'):
+        raise ValueError(f"不支持的传输模式: {transport}")
+
+    security = None
+    if transport == 'http':
+        # 先做安全检查，不安全的配置直接拒绝启动（抛出 InsecureBindError）
+        security = resolve_http_security(host)
+
     # 初始化工具实例
     _get_tools(project_root)
+    removed = apply_tool_policy()
 
-    # 打印启动信息
-    print()
-    print("=" * 60)
-    print("  TrendRadar MCP Server - FastMCP 2.0")
-    print("=" * 60)
-    print(f"  传输模式: {transport.upper()}")
+    _print_banner(transport, host, port, project_root,
+                  bool(security and security.auth_enabled), removed)
 
     if transport == 'stdio':
-        print("  协议: MCP over stdio (标准输入输出)")
-        print("  说明: 通过标准输入输出与 MCP 客户端通信")
-    elif transport == 'http':
-        print("  协议: MCP over HTTP (生产环境)")
-        print(f"  服务器监听: {host}:{port}")
-
-    if project_root:
-        print(f"  项目目录: {project_root}")
+        _run_stdio()
     else:
-        print("  项目目录: 当前目录")
-
-    print()
-    print("  已注册的工具:")
-    print("    === 日期解析工具（推荐优先调用）===")
-    print("    0. resolve_date_range       - 解析自然语言日期为标准格式")
-    print()
-    print("    === 基础数据查询（P0核心）===")
-    print("    1. get_latest_news        - 获取最新新闻")
-    print("    2. get_news_by_date       - 按日期查询新闻（支持自然语言）")
-    print("    3. get_trending_topics    - 获取趋势话题（支持自动提取）")
-    print()
-    print("    === RSS 数据查询 ===")
-    print("    4. get_latest_rss         - 获取最新 RSS 订阅数据")
-    print("    5. search_rss             - 搜索 RSS 数据")
-    print("    6. get_rss_feeds_status   - 获取 RSS 源状态")
-    print()
-    print("    === 智能检索工具 ===")
-    print("    7. search_news            - 统一新闻搜索（关键词/模糊/实体）")
-    print("    8. find_related_news      - 相关新闻查找（支持历史数据）")
-    print()
-    print("    === 高级数据分析 ===")
-    print("    9. analyze_topic_trend      - 统一话题趋势分析（热度/生命周期/爆火/预测）")
-    print("    10. analyze_data_insights   - 统一数据洞察分析（平台对比/活跃度/关键词共现）")
-    print("    11. analyze_sentiment       - 情感倾向分析")
-    print("    12. aggregate_news          - 跨平台新闻聚合去重")
-    print("    13. compare_periods         - 时期对比分析（周环比/月环比）")
-    print("    14. generate_summary_report - 每日/每周摘要生成")
-    print()
-    print("    === 配置与系统管理 ===")
-    print("    15. get_current_config      - 获取当前系统配置")
-    print("    16. get_system_status       - 获取系统运行状态")
-    print("    17. check_version           - 检查版本更新（对比本地与远程版本）")
-    print("    18. trigger_crawl           - 手动触发爬取任务")
-    print()
-    print("    === 存储同步工具 ===")
-    print("    19. sync_from_remote        - 从远程存储拉取数据到本地")
-    print("    20. get_storage_status      - 获取存储配置和状态")
-    print("    21. list_available_dates    - 列出本地/远程可用日期")
-    print()
-    print("    === 文章内容读取 ===")
-    print("    22. read_article            - 读取单篇文章内容（Markdown格式）")
-    print("    23. read_articles_batch     - 批量读取多篇文章（自动限速）")
-    print()
-    print("    === 通知推送工具 ===")
-    print("    24. get_channel_format_guide  - 获取渠道格式化策略指南（提示词）")
-    print("    25. get_notification_channels - 获取已配置的通知渠道状态")
-    print("    26. send_notification         - 向通知渠道发送消息（自动适配格式）")
-    print("=" * 60)
-    print()
-
-    # 根据传输模式运行服务器
-    if transport == 'stdio':
-        mcp.run(transport='stdio')
-    elif transport == 'http':
-        # HTTP 模式（生产推荐）
         mcp.run(
             transport='http',
             host=host,
             port=port,
-            path='/mcp'  # HTTP 端点路径
+            path=DEFAULT_HTTP_PATH,
+            show_banner=False,
+            **http_transport_kwargs(security),
         )
-    else:
-        raise ValueError(f"不支持的传输模式: {transport}")
 
 
-if __name__ == '__main__':
+def build_arg_parser():
     import argparse
 
     parser = argparse.ArgumentParser(
         description='TrendRadar MCP Server - 新闻热点聚合 MCP 工具服务器',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
+环境变量:
+  MCP_AUTH_TOKEN                HTTP 模式的 Bearer Token（监听非回环地址时必填，至少 16 字符）
+  MCP_ALLOWED_HOSTS             额外允许的 Host 头（逗号分隔，如 mcp.example.com）
+  MCP_ALLOWED_ORIGINS           额外允许的浏览器 Origin（逗号分隔）
+  MCP_ENABLE_SIDE_EFFECT_TOOLS  设为 false 时不注册 send_notification / trigger_crawl / sync_from_remote
+  JINA_API_KEY                  read_article 使用的 Jina Reader API Key（可选）
+
 详细配置教程请查看: README-Cherry-Studio.md
         """
     )
@@ -1229,29 +1316,41 @@ if __name__ == '__main__':
         '--transport',
         choices=['stdio', 'http'],
         default='stdio',
-        help='传输模式：stdio (默认) 或 http (生产环境)'
+        help='传输模式：stdio (默认) 或 http'
     )
     parser.add_argument(
         '--host',
-        default='0.0.0.0',
-        help='HTTP模式的监听地址，默认 0.0.0.0'
+        default=DEFAULT_HTTP_HOST,
+        help=f'HTTP 模式的监听地址，默认 {DEFAULT_HTTP_HOST}（非回环地址需设置 MCP_AUTH_TOKEN）'
     )
     parser.add_argument(
         '--port',
         type=int,
-        default=3333,
-        help='HTTP模式的监听端口，默认 3333'
+        default=DEFAULT_HTTP_PORT,
+        help=f'HTTP 模式的监听端口，默认 {DEFAULT_HTTP_PORT}'
     )
     parser.add_argument(
         '--project-root',
         help='项目根目录路径'
     )
+    return parser
 
-    args = parser.parse_args()
 
-    run_server(
-        project_root=args.project_root,
-        transport=args.transport,
-        host=args.host,
-        port=args.port
-    )
+def main(argv: Optional[List[str]] = None) -> int:
+    """命令行入口（`python -m mcp_server.server` 与 `trendradar-mcp` 共用）"""
+    args = build_arg_parser().parse_args(argv)
+    try:
+        run_server(
+            project_root=args.project_root,
+            transport=args.transport,
+            host=args.host,
+            port=args.port
+        )
+    except InsecureBindError as e:
+        _eprint(f"[TrendRadar MCP] {e}")
+        return 2
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
