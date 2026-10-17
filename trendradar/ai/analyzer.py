@@ -7,15 +7,80 @@ AI 分析器模块
 """
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, NamedTuple, Optional
 
-from trendradar.ai.client import AIClient
+from trendradar.ai.budget import AIBudgetExhausted
+from trendradar.ai.client import AIClient, AIResponseTruncated
 from trendradar.ai.prompt_loader import load_prompt_template
 
 from trendradar.core.logger import get_logger
 
 log = get_logger(__name__)
+
+# 分析结果的文本字段（LLM 可能把它们返回成数组/对象/null，需统一归一化为 str）
+TEXT_FIELDS = (
+    "core_trends",
+    "sentiment_controversy",
+    "signals",
+    "rss_insights",
+    "outlook_strategy",
+)
+
+_TEMPLATE_VAR = re.compile(r"\{(\w+)\}")
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def as_text(value: Any) -> str:
+    """把 LLM 返回的任意 JSON 值归一化为字符串（list 按行拼接，dict 按 "键：值"）。"""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bool):
+        return "是" if value else "否"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, (list, tuple)):
+        return "\n".join(t for t in (as_text(x).strip() for x in value) if t)
+    if isinstance(value, dict):
+        parts = []
+        for k, v in value.items():
+            text = as_text(v).strip()
+            if text:
+                parts.append(f"{k}：{text}")
+        return "\n".join(parts)
+    return str(value)
+
+
+def normalize_result_fields(result: "AIAnalysisResult") -> "AIAnalysisResult":
+    """就地把结果的文本字段与 standalone_summaries 归一化为 str（渲染前防御性调用）。"""
+    for name in TEXT_FIELDS:
+        setattr(result, name, as_text(getattr(result, name, "")))
+    summaries = getattr(result, "standalone_summaries", None)
+    if isinstance(summaries, dict):
+        result.standalone_summaries = {
+            str(k): as_text(v) for k, v in summaries.items() if as_text(v).strip()
+        }
+    else:
+        result.standalone_summaries = {}
+    result.error = as_text(getattr(result, "error", ""))
+    return result
+
+
+def render_template(template: str, variables: Dict[str, str]) -> str:
+    """单次替换模板变量：已替换进去的内容（如新闻标题里的 ``{language}``）不会被二次替换。"""
+    return _TEMPLATE_VAR.sub(
+        lambda m: variables[m.group(1)] if m.group(1) in variables else m.group(0),
+        template or "",
+    )
+
+
+def _clean_title(text: Any) -> str:
+    """标题单行化（防止换行伪造结构），去掉控制字符。"""
+    s = _CONTROL_CHARS.sub(" ", str(text or "").replace("\r", " ").replace("\n", " "))
+    return re.sub(r"\s{2,}", " ", s).strip()
 
 
 @dataclass
@@ -33,6 +98,7 @@ class AIAnalysisResult:
     raw_response: str = ""               # 原始响应
     success: bool = False                # 是否成功
     skipped: bool = False                # 是否因无内容跳过（非失败）
+    truncated: bool = False              # 输出是否被 max_tokens 截断
     error: str = ""                      # 错误信息
 
     # 新闻数量统计
@@ -175,25 +241,27 @@ class AIAnalyzer:
         if not keywords:
             keywords = [s.get("word", "") for s in stats if s.get("word")] if stats else []
 
-        # 使用安全的字符串替换，避免模板中其他花括号（如 JSON 示例）被误解析
-        user_prompt = self.user_prompt_template
-        user_prompt = user_prompt.replace("{report_mode}", report_mode)
-        user_prompt = user_prompt.replace("{report_type}", report_type)
-        user_prompt = user_prompt.replace("{current_time}", current_time)
-        user_prompt = user_prompt.replace("{news_count}", str(prepared.hotlist_total))
-        user_prompt = user_prompt.replace("{rss_count}", str(prepared.rss_total))
-        user_prompt = user_prompt.replace("{platforms}", ", ".join(platforms) if platforms else "多平台")
-        user_prompt = user_prompt.replace("{keywords}", ", ".join(keywords[:20]) if keywords else "无")
-        user_prompt = user_prompt.replace("{news_content}", prepared.news_content)
-        user_prompt = user_prompt.replace("{rss_content}", prepared.rss_content)
-        user_prompt = user_prompt.replace("{language}", self.language)
-
         # 构建独立展示区内容
         standalone_content = ""
         standalone_count = 0
         if self.include_standalone and standalone_data:
             standalone_content, standalone_count = self._prepare_standalone_content(standalone_data)
-        user_prompt = user_prompt.replace("{standalone_content}", standalone_content)
+
+        # 单次替换所有变量：只替换已知占位符（模板中的 JSON 示例花括号不受影响），
+        # 且新闻标题里字面出现的 {language} 等不会被二次替换（审计 #19）
+        user_prompt = render_template(self.user_prompt_template, {
+            "report_mode": str(report_mode),
+            "report_type": str(report_type),
+            "current_time": current_time,
+            "news_count": str(prepared.hotlist_total),
+            "rss_count": str(prepared.rss_total),
+            "platforms": ", ".join(platforms) if platforms else "多平台",
+            "keywords": ", ".join(keywords[:20]) if keywords else "无",
+            "news_content": prepared.news_content,
+            "rss_content": prepared.rss_content,
+            "language": self.language,
+            "standalone_content": standalone_content,
+        })
 
         if self.debug:
             log.info("\n" + "=" * 80)
@@ -208,11 +276,27 @@ class AIAnalyzer:
 
         # 调用 AI API（使用 LiteLLM）
         try:
-            response = self._call_ai(user_prompt)
+            try:
+                response = self._call_ai(user_prompt)
+            except AIResponseTruncated:
+                # 截断的 JSON 经 json_repair 也能"修好"，但内容残缺，不能当成功推送；
+                # 预算允许时要求精简输出重试一次
+                log.warning("[AI] 分析输出被截断（finish_reason=length），要求精简后重试一次")
+                try:
+                    response = self._call_ai(
+                        user_prompt
+                        + "\n\n【注意】上一次输出过长被截断。请把每个字段压缩到原来的一半以内，"
+                        "务必输出完整、合法的 JSON。"
+                    )
+                except AIResponseTruncated:
+                    return AIAnalysisResult(
+                        success=False, truncated=True,
+                        error="AI 输出被截断（finish_reason=length），请调大 ai.max_tokens 或减少 max_news_for_analysis",
+                    )
             result = self._parse_response(response)
 
-            # JSON 解析失败时的重试兜底（仅重试一次）
-            if result.error and "JSON 解析错误" in result.error:
+            # JSON 解析失败时的重试兜底（仅重试一次，耗时计入全局 AI 预算）
+            if not result.success and result.error and "JSON 解析错误" in result.error:
                 log.info("[AI] JSON 解析失败，尝试让 AI 修复...")
                 retry_result = self._retry_fix_json(response, result.error)
                 if retry_result and retry_result.success and not retry_result.error:
@@ -220,7 +304,10 @@ class AIAnalyzer:
                     retry_result.raw_response = response
                     result = retry_result
                 else:
-                    log.info("[AI] JSON 修复失败，使用原始文本兜底")
+                    log.info("[AI] JSON 修复失败，本次分析按失败处理")
+
+            if not result.success:
+                return result
 
             # 如果配置未启用 RSS 分析，强制清空 AI 返回的 RSS 洞察
             if not self.include_rss:
@@ -241,7 +328,9 @@ class AIAnalyzer:
             result.max_news_limit = self.max_news
             result.include_rss = self.include_rss
             result.include_standalone = self.include_standalone
-            return result
+            return normalize_result_fields(result)
+        except AIBudgetExhausted as e:
+            return AIAnalysisResult(success=False, error=f"AI 分析跳过: {e}")
         except Exception as e:
             error_type = type(e).__name__
             error_msg = str(e)
@@ -280,12 +369,12 @@ class AIAnalyzer:
                     for t in titles:
                         if not isinstance(t, dict):
                             continue
-                        title = t.get("title", "")
+                        title = _clean_title(t.get("title", ""))
                         if not title:
                             continue
 
                         # 来源
-                        source = t.get("source_name", t.get("source", ""))
+                        source = _clean_title(t.get("source_name", t.get("source", "")))
 
                         # 构建行
                         if source:
@@ -337,12 +426,12 @@ class AIAnalyzer:
                     for t in titles:
                         if not isinstance(t, dict):
                             continue
-                        title = t.get("title", "")
+                        title = _clean_title(t.get("title", ""))
                         if not title:
                             continue
 
                         # 来源
-                        source = t.get("source_name", t.get("feed_name", ""))
+                        source = _clean_title(t.get("source_name", t.get("feed_name", "")))
 
                         # 发布时间
                         time_display = t.get("time_display", "")
@@ -493,7 +582,7 @@ class AIAnalyzer:
 
             lines.append(f"### [{platform_name}]")
             for item in items:
-                title = item.get("title", "")
+                title = _clean_title(item.get("title", ""))
                 if not title:
                     continue
 
@@ -539,7 +628,7 @@ class AIAnalyzer:
 
             lines.append(f"### [{feed_name}]")
             for item in items:
-                title = item.get("title", "")
+                title = _clean_title(item.get("title", ""))
                 if not title:
                     continue
 
@@ -559,8 +648,14 @@ class AIAnalyzer:
         return "\n".join(lines), standalone_count
 
     def _parse_response(self, response: str) -> AIAnalysisResult:
-        """解析 AI 响应"""
-        result = AIAnalysisResult(raw_response=response)
+        """解析 AI 响应
+
+        成功的判定：解析出 JSON 对象，且至少一个已知字段有非空内容。
+        拒答、散文、无法解析的 JSON 一律 ``success=False``（不占 once 时段、不写日报、不推送垃圾内容）。
+        所有字段经 ``as_text`` 归一化，数组/对象/null 不会让下游渲染崩溃。
+        """
+        result = AIAnalysisResult(raw_response=response if isinstance(response, str) else as_text(response))
+        response = result.raw_response
 
         if not response or not response.strip():
             result.error = "AI 返回空响应"
@@ -586,9 +681,15 @@ class AIAnalyzer:
         json_str = json_str.strip()
         if not json_str:
             result.error = "提取的 JSON 内容为空"
-            result.core_trends = response[:500] + "..." if len(response) > 500 else response
-            result.success = True
             return result
+
+        # 只有看起来像 JSON 对象时才尝试解析/修复：拒答或散文直接判失败
+        brace = json_str.find("{")
+        if brace == -1:
+            result.error = f"AI 未返回 JSON（可能是拒答）: {json_str[:80]}"
+            return result
+        if brace > 0:
+            json_str = json_str[brace:]
 
         # 第一步：标准 JSON 解析
         data = None
@@ -611,38 +712,38 @@ class AIAnalyzer:
                 pass
 
         # 两步都失败，记录错误（后续由 analyze 方法的重试机制处理）
-        if data is None:
+        if not isinstance(data, dict):
             if parse_error:
                 error_context = json_str[max(0, parse_error.pos - 30):parse_error.pos + 30] if json_str and parse_error.pos else ""
                 result.error = f"JSON 解析错误 (位置 {parse_error.pos}): {parse_error.msg}"
                 if error_context:
                     result.error += f"，上下文: ...{error_context}..."
             else:
-                result.error = "JSON 解析失败"
-            # 兜底：使用已提取的 json_str（不含 markdown 标记），避免推送中出现 ```json
-            result.core_trends = json_str[:500] + "..." if len(json_str) > 500 else json_str
-            result.success = True
+                result.error = "JSON 解析失败（顶层不是对象）"
             return result
 
-        # 解析成功，提取字段
-        try:
-            result.core_trends = data.get("core_trends", "")
-            result.sentiment_controversy = data.get("sentiment_controversy", "")
-            result.signals = data.get("signals", "")
-            result.rss_insights = data.get("rss_insights", "")
-            result.outlook_strategy = data.get("outlook_strategy", "")
+        # 解析成功，提取并归一化字段
+        for name in TEXT_FIELDS:
+            setattr(result, name, as_text(data.get(name)).strip())
+        summaries = data.get("standalone_summaries", {})
+        if isinstance(summaries, dict):
+            result.standalone_summaries = {
+                str(k): as_text(v).strip() for k, v in summaries.items() if as_text(v).strip()
+            }
+        elif isinstance(summaries, list):
+            # 兼容 [{"source": "...", "summary": "..."}] 形态
+            out = {}
+            for item in summaries:
+                if isinstance(item, dict):
+                    k = item.get("source") or item.get("name") or item.get("id")
+                    v = item.get("summary") or item.get("content")
+                    if k and as_text(v).strip():
+                        out[str(k)] = as_text(v).strip()
+            result.standalone_summaries = out
 
-            # 解析独立展示区概括
-            summaries = data.get("standalone_summaries", {})
-            if isinstance(summaries, dict):
-                result.standalone_summaries = {
-                    str(k): str(v) for k, v in summaries.items()
-                }
+        if not any(getattr(result, n) for n in TEXT_FIELDS) and not result.standalone_summaries:
+            result.error = "AI 响应中没有任何已知分析字段"
+            return result
 
-            result.success = True
-        except (KeyError, TypeError, AttributeError) as e:
-            result.error = f"字段提取错误: {type(e).__name__}: {e}"
-            result.core_trends = json_str[:500] + "..." if len(json_str) > 500 else json_str
-            result.success = True
-
+        result.success = True
         return result

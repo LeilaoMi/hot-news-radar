@@ -4,17 +4,41 @@ AI 翻译器模块
 
 对推送内容进行多语言翻译
 基于 LiteLLM 统一接口，支持 100+ AI 提供商
+
+对齐安全（审计 #2/#15）：
+- 批量翻译要求模型输出 ``[n] 译文`` 编号格式（兼容 ``【n】``、``n.``、``n、``、``n)`` 等变体）；
+- 编号缺失、重复、越界或条数不符时**整批作废**（不做按行顺序回退），按二分拆批重试，
+  最终落到单条请求；单条请求无编号时仅在恰好一行输出时接受；
+- 截断（finish_reason=length）同样作废并拆批重试；
+- 只有通过校验的译文才写缓存；缓存 kind 带目标语言、模型与提示词 hash，过期由 AICache TTL 控制。
 """
 
+import hashlib
+import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
+from trendradar.ai import settings
+from trendradar.ai.budget import AIBudgetExhausted, get_budget
 from trendradar.ai.cache import AICache
 from trendradar.ai.client import AIClient
 from trendradar.ai.prompt_loader import load_prompt_template
 from trendradar.core.logger import get_logger
 
 log = get_logger(__name__)
+
+# 编号行：[1] / 【1】 / 1. / 1、 / 1) / 1） / 1: / 1：，其后可带 : ： . - 等分隔符
+_NUMBERED_LINE = re.compile(
+    r"^\s*(?:\[\s*(\d+)\s*\]|【\s*(\d+)\s*】|(\d+)\s*[\.、\)）:：])\s*[:：\.\-、]?\s*(.*)$"
+)
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def _sanitize_title(text: str) -> str:
+    """送入批量 prompt 前清洗标题：换行/控制字符折叠为空格，防止注入 ``[k]`` 行篡改其它条目。"""
+    s = _CONTROL_CHARS.sub(" ", str(text).replace("\r", " ").replace("\n", " "))
+    return re.sub(r"\s{2,}", " ", s).strip()
 
 
 @dataclass
@@ -57,22 +81,81 @@ class AITranslator:
         self.target_language = translation_config.get("LANGUAGE", "English")
         self.scope = translation_config.get("SCOPE", {"HOTLIST": True, "RSS": True, "STANDALONE": True})
 
+        # loader 曾漏读 ai_translation 的 batch_size / batch_interval / cache_enabled（审计 #14）：
+        # 这里从 yaml 补齐并**写回同一个配置字典**，调用方（dispatcher 按 BATCH_SIZE 分批）
+        # 无需改动即可生效；env AI_TRANSLATION_BATCH_SIZE / _BATCH_INTERVAL / _CACHE_ENABLED 优先
+        self._fill_missing_config(translation_config)
+        self.batch_size = max(1, int(translation_config.get("BATCH_SIZE", 100) or 100))
+        self.batch_interval = max(0.0, float(translation_config.get("BATCH_INTERVAL", 2) or 0))
+        # 对齐失败时的二分重试深度（2 = 一批最多拆成 4 份，额外请求 ≤ 6 次；0 = 不重试直接保留原文）
+        split_raw = settings.env_str("AI_TRANSLATION_MAX_SPLIT_DEPTH") or settings.raw_section("ai_translation").get("max_split_depth", 2)
+        try:
+            self.max_split_depth = max(0, int(split_raw))
+        except (TypeError, ValueError):
+            self.max_split_depth = 2
+
+        # 按功能解析模型/温度/端点（env AI_TRANSLATION_MODEL > env AI_MODEL > yaml ai.translation_model > ai.model）
+        ai_config = settings.feature_ai_config(ai_config, "translation")
+        self.ai_config = ai_config
+
         # 创建 AI 客户端（基于 LiteLLM）
         self.client = AIClient(ai_config)
-
-        # AI 结果缓存：同一标题跨运行/跨批次/daily 补跑零成本复用。
-        # 开关：ai_translation.CACHE_ENABLED（默认开）+ env AI_CACHE_ENABLED；
-        # 路径：ai.CACHE_DB_PATH → env AI_CACHE_DB → output/ai_cache.db
-        self.cache = AICache(
-            db_path=ai_config.get("CACHE_DB_PATH"),
-            enabled=translation_config.get("CACHE_ENABLED", True),
-        )
 
         # 加载提示词模板
         self.system_prompt, self.user_prompt_template = load_prompt_template(
             translation_config.get("PROMPT_FILE", "ai_translation_prompt.txt"),
             label="翻译",
         )
+
+        # AI 结果缓存：同一标题跨批次/daily 补跑零成本复用。
+        # 开关：ai_translation.cache_enabled（默认开），env AI_CACHE_ENABLED=false 为总闸；
+        # 路径：env AI_CACHE_DB > yaml ai.cache_db_path > output/ai_cache.db
+        self.cache = AICache(
+            db_path=ai_config.get("CACHE_DB_PATH"),
+            enabled=translation_config.get("CACHE_ENABLED", True),
+        )
+        prompt_hash = hashlib.sha256(
+            f"{self.system_prompt}\x00{self.user_prompt_template}".encode("utf-8")
+        ).hexdigest()[:10]
+        self.cache_kind = f"translate:{self.target_language}:{self.client.model}:{prompt_hash}"
+
+    @staticmethod
+    def _fill_missing_config(translation_config: Dict[str, Any]) -> None:
+        raw = settings.raw_section("ai_translation")
+        specs = (
+            ("BATCH_SIZE", "batch_size", int),
+            ("BATCH_INTERVAL", "batch_interval", float),
+            ("CACHE_ENABLED", "cache_enabled", settings.parse_bool),
+        )
+        for key, yaml_key, cast in specs:
+            env_raw = settings.env_str(f"AI_TRANSLATION_{key}")
+            value = None
+            if env_raw:
+                try:
+                    value = cast(env_raw)
+                except (TypeError, ValueError):
+                    log.warning(f"[翻译] 环境变量 AI_TRANSLATION_{key}={env_raw!r} 无效，已忽略")
+            if value is None and key not in translation_config and raw.get(yaml_key) is not None:
+                try:
+                    value = cast(raw.get(yaml_key))
+                except (TypeError, ValueError):
+                    value = None
+            if value is not None:
+                translation_config[key] = value
+
+    def _get_cache_kind(self) -> str:
+        return getattr(self, "cache_kind", None) or f"translate:{self.target_language}"
+
+    @staticmethod
+    def _plausible(original: str, translated: str) -> bool:
+        """译文健全性：非空、长度不过分离谱、不残留编号前缀。"""
+        if not translated or not translated.strip():
+            return False
+        if len(translated) > max(200, 8 * len(original)):
+            return False
+        if _NUMBERED_LINE.match(translated) and not _NUMBERED_LINE.match(original):
+            return False
+        return True
 
     def translate(self, text: str) -> TranslationResult:
         """
@@ -99,33 +182,11 @@ class AITranslator:
             result.success = True
             return result
 
-        # 缓存命中直接返回
-        cache_kind = f"translate:{self.target_language}"
-        cached = self.cache.get(cache_kind, text)
-        if cached is not None:
-            result.translated_text = cached
-            result.success = True
-            return result
-
-        try:
-            # 构建提示词
-            user_prompt = self.user_prompt_template
-            user_prompt = user_prompt.replace("{target_language}", self.target_language)
-            user_prompt = user_prompt.replace("{content}", text)
-
-            # 调用 AI API
-            response = self._call_ai(user_prompt)
-            result.translated_text = response.strip()
-            result.success = True
-            self.cache.put(cache_kind, text, result.translated_text)
-
-        except Exception as e:
-            error_type = type(e).__name__
-            error_msg = str(e)
-            if len(error_msg) > 100:
-                error_msg = error_msg[:100] + "..."
-            result.error = f"翻译失败 ({error_type}): {error_msg}"
-
+        # 单条也走批量路径：同一套编号对齐校验、缓存与预算逻辑
+        batch = self.translate_batch([text])
+        if batch.results:
+            return batch.results[0]
+        result.error = "翻译失败"
         return result
 
     def translate_batch(self, texts: List[str]) -> BatchTranslationResult:
@@ -183,9 +244,8 @@ class AITranslator:
         if not non_empty_texts:
             return batch_result
 
-        # ── 缓存命中分流：仅将未命中的标题送去 API（kind 含目标语言隔离）──
-        cache_kind = f"translate:{self.target_language}"
-        original_by_index = dict(zip(non_empty_indices, non_empty_texts))
+        # ── 缓存命中分流：仅将未命中的标题送去 API（kind 含目标语言/模型/提示词隔离）──
+        cache_kind = self._get_cache_kind()
         to_translate_indices = list(non_empty_indices)
         to_translate_texts = list(non_empty_texts)
         if self.cache.enabled:
@@ -206,138 +266,151 @@ class AITranslator:
                     f"实际请求 {len(to_translate_texts)} 条"
                 )
 
-        if to_translate_texts:
-            try:
-                # 构建批量翻译内容（使用编号格式，仅含未命中缓存的条目）
-                batch_content = self._format_batch_content(to_translate_texts)
+        if not to_translate_texts:
+            return batch_result
 
-                # 构建提示词
-                user_prompt = self.user_prompt_template
-                user_prompt = user_prompt.replace("{target_language}", self.target_language)
-                user_prompt = user_prompt.replace("{content}", batch_content)
+        batch_size = max(1, int(getattr(self, "batch_size", 100) or 100))
+        interval = float(getattr(self, "batch_interval", 0) or 0)
+        pending = list(zip(to_translate_indices, to_translate_texts))
+        chunks = [pending[k:k + batch_size] for k in range(0, len(pending), batch_size)]
+        for chunk_no, chunk in enumerate(chunks):
+            if chunk_no > 0 and interval > 0:
+                time.sleep(interval)
+            if get_budget().exhausted():
+                self._mark_failed(batch_result, [i for i, _ in chunk], "AI 时间预算耗尽，保留原文")
+                continue
+            self._translate_chunk(batch_result, chunk, cache_kind, depth=0)
 
-                # 记录 debug 信息（包含完整的 system + user prompt）
+        return batch_result
+
+    def _mark_failed(self, batch_result: BatchTranslationResult, indices: List[int], error: str) -> None:
+        for idx in indices:
+            r = batch_result.results[idx]
+            if not r.success:
+                r.error = error
+                r.translated_text = r.translated_text or ""
+                batch_result.fail_count += 1
+
+    def _translate_chunk(self, batch_result, chunk, cache_kind: str, depth: int) -> None:
+        """翻译一组 (原始位置, 原文)；对齐校验失败时二分拆批重试，失败条目保留原文、不写缓存。"""
+        indices = [i for i, _ in chunk]
+        texts = [t for _, t in chunk]
+        try:
+            batch_content = self._format_batch_content(texts)
+            user_prompt = self.user_prompt_template
+            user_prompt = user_prompt.replace("{target_language}", self.target_language)
+            user_prompt = user_prompt.replace("{content}", batch_content)
+
+            if not batch_result.prompt:
                 if self.system_prompt:
                     batch_result.prompt = f"[system]\n{self.system_prompt}\n\n[user]\n{user_prompt}"
                 else:
                     batch_result.prompt = user_prompt
 
-                # 调用 AI API
-                response = self._call_ai(user_prompt)
+            response = self._call_ai(user_prompt) or ""
+            batch_result.raw_response = (
+                response if not batch_result.raw_response
+                else batch_result.raw_response + "\n---\n" + response
+            )
+            translated, parsed_count = self._parse_batch_response(response, len(texts))
+            batch_result.parsed_count += parsed_count
+            reason = "" if translated is not None else f"编号对齐校验失败（期望 {len(texts)} 条，解析 {parsed_count} 条）"
+        except AIBudgetExhausted as e:
+            self._mark_failed(batch_result, indices, f"批量翻译跳过: {e}")
+            return
+        except Exception as e:
+            error_msg = f"批量翻译失败: {type(e).__name__}: {str(e)[:200]}"
+            # 必须打出来：此前异常被静默吞掉，CI 日志里只有 litellm 的
+            # 尾部提示，看不到真实病因（429/401/连接超时无法区分）
+            log.error(error_msg)
+            from trendradar.ai.client import AIResponseTruncated
+            if isinstance(e, AIResponseTruncated) and len(chunk) > 1:
+                translated, reason = None, "输出被截断"
+            else:
+                self._mark_failed(batch_result, indices, error_msg)
+                return
 
-                # 记录 AI 原始响应
-                batch_result.raw_response = response
+        if translated is None:
+            if len(chunk) > 1 and depth < getattr(self, "max_split_depth", 2) and not get_budget().exhausted():
+                log.warning(f"[AI翻译] {reason}，拆分为两批重试（{len(chunk)} 条）")
+                mid = len(chunk) // 2
+                self._translate_chunk(batch_result, chunk[:mid], cache_kind, depth + 1)
+                self._translate_chunk(batch_result, chunk[mid:], cache_kind, depth + 1)
+                return
+            log.warning(f"[AI翻译] {reason}，本批 {len(chunk)} 条保留原文（不写缓存）")
+            self._mark_failed(batch_result, indices, f"翻译结果无法对齐: {reason}")
+            return
 
-                # 解析批量翻译结果
-                translated_texts, raw_parsed_count = self._parse_batch_response(response, len(to_translate_texts))
-                batch_result.parsed_count = raw_parsed_count
-
-                # 填充结果（跳过空翻译，避免用空字符串覆盖原始标题）
-                for idx, translated in zip(to_translate_indices, translated_texts):
-                    if translated and translated.strip():
-                        batch_result.results[idx].translated_text = translated
-                        batch_result.results[idx].success = True
-                        batch_result.success_count += 1
-                        # 成功译文写入缓存，下次零成本复用
-                        self.cache.put(cache_kind, original_by_index[idx], translated)
-                    else:
-                        batch_result.results[idx].translated_text = batch_result.results[idx].original_text
-                        batch_result.results[idx].success = True
-                        batch_result.success_count += 1
-
-            except Exception as e:
-                error_msg = f"批量翻译失败: {type(e).__name__}: {str(e)[:200]}"
-                # 必须打出来：此前异常被静默吞掉，CI 日志里只有 litellm 的
-                # 尾部提示，看不到真实病因（429/401/连接超时无法区分）
-                log.error(error_msg)
-                # 仅未命中缓存的条目标记失败；缓存命中的已是成功态，不受影响
-                for idx in to_translate_indices:
-                    batch_result.results[idx].error = error_msg
-                batch_result.fail_count = len(to_translate_indices)
-
-        return batch_result
+        for idx, original, text in zip(indices, texts, translated):
+            r = batch_result.results[idx]
+            if self._plausible(original, text):
+                r.translated_text = text
+                r.success = True
+                batch_result.success_count += 1
+                if text != original:
+                    self.cache.put(cache_kind, original, text)
+            else:
+                # 单条译文不可信：保留原文，按"未翻译"处理，不写缓存
+                r.translated_text = original
+                r.success = True
+                batch_result.success_count += 1
 
     def _format_batch_content(self, texts: List[str]) -> str:
-        """格式化批量翻译内容"""
-        lines = []
-        for i, text in enumerate(texts, 1):
-            lines.append(f"[{i}] {text}")
-        return "\n".join(lines)
+        """格式化批量翻译内容（标题先清洗换行，杜绝伪造编号行）"""
+        return "\n".join(f"[{i}] {_sanitize_title(text)}" for i, text in enumerate(texts, 1))
 
     def _parse_batch_response(self, response: str, expected_count: int) -> tuple:
         """
-        解析批量翻译响应
-
-        Args:
-            response: AI 响应文本
-            expected_count: 期望的翻译数量
+        解析批量翻译响应（严格对齐）
 
         Returns:
-            tuple: (翻译结果列表, AI 原始解析出的条目数)
+            tuple: (译文列表 或 None, 解析出的条目数)。
+            None 表示整批不可信（编号缺失/重复/越界/条数不符，或无编号且无法安全对齐），
+            调用方应丢弃并重试，**不得**按行顺序回退。
         """
-        results = []
-        lines = response.strip().split("\n")
-
-        current_idx = None
-        current_text = []
-
+        lines = [ln.strip() for ln in (response or "").strip().split("\n")]
+        entries: Dict[int, str] = {}
+        duplicate = False
+        out_of_range = False
+        parsed = 0
         for line in lines:
-            # 尝试匹配 [数字] 格式
-            stripped = line.strip()
-            if stripped.startswith("[") and "]" in stripped:
-                bracket_end = stripped.index("]")
-                try:
-                    idx = int(stripped[1:bracket_end])
-                    # 保存之前的内容
-                    if current_idx is not None:
-                        results.append((current_idx, "\n".join(current_text).strip()))
-                    current_idx = idx
-                    current_text = [stripped[bracket_end + 1:].strip()]
-                except ValueError:
-                    if current_idx is not None:
-                        current_text.append(line)
-            else:
-                if current_idx is not None:
-                    current_text.append(line)
+            if not line:
+                continue
+            m = _NUMBERED_LINE.match(line)
+            if not m:
+                continue  # 前导语/结束语/多余说明：忽略（不参与对齐）
+            idx = int(m.group(1) or m.group(2) or m.group(3))
+            text = m.group(4).strip()
+            parsed += 1
+            if not 1 <= idx <= expected_count:
+                out_of_range = True
+                continue
+            if idx in entries:
+                duplicate = True
+                continue
+            entries[idx] = text
 
-        # 保存最后一条
-        if current_idx is not None:
-            results.append((current_idx, "\n".join(current_text).strip()))
+        if parsed == 0:
+            # 无任何编号：仅单条请求且恰好一行非空输出时可安全接受
+            non_empty = [ln for ln in lines if ln]
+            if expected_count == 1 and len(non_empty) == 1:
+                return [non_empty[0]], 1
+            return None, 0
 
-        # 基于 AI 返回的真实编号精确回填，而非位置顺序，避免 AI 漏号/乱序时整体错位
-        raw_parsed_count = len(results)
+        if duplicate or out_of_range or len(entries) != expected_count:
+            return None, parsed
 
-        if results:
-            # 编号 i(1-based) 对应位置 i-1；缺失的编号位置留空（由上层保留原文），
-            # 不让后续译文顶替到相邻标题上
-            idx_to_text = {}
-            for idx, text in results:
-                if 1 <= idx <= expected_count:
-                    idx_to_text[idx] = text
-            translated = [idx_to_text.get(i + 1, "") for i in range(expected_count)]
-        else:
-            # AI 未使用 [编号] 格式：回退为按行顺序提取
-            translated = []
-            for line in lines:
-                stripped = line.strip()
-                if stripped.startswith("[") and "]" in stripped:
-                    bracket_end = stripped.index("]")
-                    translated.append(stripped[bracket_end + 1:].strip())
-                elif stripped:
-                    translated.append(stripped)
-            raw_parsed_count = len(translated)
-
-        # 确保返回正确数量
-        while len(translated) < expected_count:
-            translated.append("")
-
-        return translated[:expected_count], raw_parsed_count
+        return [entries[i] for i in range(1, expected_count + 1)], parsed
 
     def _call_ai(self, user_prompt: str) -> str:
         """调用 AI API（使用 LiteLLM）"""
         messages = []
         if self.system_prompt:
-            messages.append({"role": "system", "content": self.system_prompt})
+            # system 提示词同样含 {target_language} 占位符（此前未替换，模型看到的是字面量）
+            messages.append({
+                "role": "system",
+                "content": self.system_prompt.replace("{target_language}", self.target_language),
+            })
         messages.append({"role": "user", "content": user_prompt})
 
         return self.client.chat(messages)

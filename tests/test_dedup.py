@@ -203,9 +203,10 @@ def test_merge_group_fields(tmp_path):
     assert len(merged) == 1
     m = merged[0]
     assert m["source_name"] == "A+B"         # 来源去重保序后"+"连接
-    assert m["ranks"] == [1, 3, 5]           # 并集排序
+    assert m["ranks"] == [1, 5]              # 仅合并同来源(A)排名，跨平台排名不可比
+    assert [x["source_name"] for x in m["merged_sources"]] == ["A", "A", "B"]
     assert m["count"] == 3                   # 取 max 不虚增
     assert m["url"] == "u1"                  # 首条非空
     assert m["mobile_url"] == "m2"           # 首个非空
     assert m["is_new"] is True               # 任一为真
-    assert [x["time"] for x in m["rank_timeline"]] == ["09:00", "09:30", "10:00"]
+    assert [x["time"] for x in m["rank_timeline"]] == ["09:00", "10:00"]  # 同来源轨迹

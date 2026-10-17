@@ -86,7 +86,7 @@ class AIFilterPipeline:
         if self._debug:
             log.info("[AI筛选][DEBUG] === 配置信息 ===")
             log.info(f"[AI筛选][DEBUG] 存储后端: {self.storage.backend_name}")
-            log.info(f"[AI筛选][DEBUG] batch_size={filter_config.get('BATCH_SIZE', 200)}, "
+            log.info(f"[AI筛选][DEBUG] batch_size={filter_config.get('BATCH_SIZE', 30)}, "
                   f"batch_interval={filter_config.get('BATCH_INTERVAL', 5)}")
             log.debug(f"[AI筛选][DEBUG] interests_file={effective_interests_file}")
             log.debug(f"[AI筛选][DEBUG] prompt_file={filter_config.get('PROMPT_FILE', 'prompt.txt')}")
@@ -319,54 +319,74 @@ class AIFilterPipeline:
             log.info(f"[AI筛选] RSS: 总计 {rss_total} 条{freshness_info}, 已分析跳过 {rss_skipped} 条, 本次发送AI分析 {rss_pending} 条")
 
     def _classify_batches(self, ai_filter, pending_news, pending_rss, active_tags, interests_content, filter_config):
-        batch_size = filter_config.get("BATCH_SIZE", 200)
-        batch_interval = filter_config.get("BATCH_INTERVAL", 5)
+        """批量分类（热榜 + RSS）。
+
+        失败批次（调用异常 / 截断 / 解析失败 → None）不标记已分析，下次重试。
+        预算与熔断（审计 #5b）：本流水线预算 ``ai_filter.budget_seconds``（默认 300s，
+        env AI_FILTER_BUDGET_SECONDS 优先）+ 进程级 AI 总预算；连续 2 批失败即停止，
+        剩余新闻留待下次运行。
+        """
+        import time
+
+        from trendradar.ai import settings
+        from trendradar.ai.budget import get_budget
+
+        batch_size = max(1, int(filter_config.get("BATCH_SIZE", 30) or 30))
+        batch_interval = filter_config.get("BATCH_INTERVAL", 1)
+        budget_raw = (
+            settings.env_float("AI_FILTER_BUDGET_SECONDS")
+            or filter_config.get("BUDGET_SECONDS")
+            or settings.raw_section("ai_filter").get("budget_seconds")
+            or 300
+        )
+        try:
+            budget_seconds = float(budget_raw)
+        except (TypeError, ValueError):
+            budget_seconds = 300.0
+        start = time.monotonic()
+        state = {"batches": 0, "consecutive": 0, "stopped": ""}
+
         total_results = []
-        batch_count = 0
 
-        succeeded_news_ids = []
-        for i in range(0, len(pending_news), batch_size):
-            if batch_count > 0 and batch_interval > 0:
-                import time
-                log.info(f"[AI筛选] 批次间隔等待 {batch_interval} 秒...")
-                time.sleep(batch_interval)
-            batch = pending_news[i:i + batch_size]
-            titles_for_ai = [
-                {"id": n["id"], "title": n["title"], "source": n.get("source_name", "")}
-                for n in batch
-            ]
-            batch_results = ai_filter.classify_batch(titles_for_ai, active_tags, interests_content)
-            batch_count += 1
-            if batch_results is None:
-                log.info(f"[AI筛选] 热榜批次 {i // batch_size + 1}: {len(batch)} 条 → 分类失败，将在下次运行重试")
-                continue
-            for r in batch_results:
-                r["source_type"] = "hotlist"
-            total_results.extend(batch_results)
-            succeeded_news_ids.extend(n["id"] for n in batch)
-            log.info(f"[AI筛选] 热榜批次 {i // batch_size + 1}: {len(batch)} 条 → {len(batch_results)} 条匹配")
+        def run(pending, source_type, label):
+            succeeded = []
+            for i in range(0, len(pending), batch_size):
+                if not state["stopped"]:
+                    if get_budget().exhausted():
+                        state["stopped"] = "AI 总预算耗尽或熔断"
+                    elif budget_seconds > 0 and time.monotonic() - start > budget_seconds:
+                        state["stopped"] = f"AI 筛选累计耗时超预算 {budget_seconds:.0f}s"
+                if state["stopped"]:
+                    log.warning(
+                        f"[AI筛选] {state['stopped']}，{label} 剩余 {len(pending) - i} 条留待下次运行"
+                    )
+                    break
+                if state["batches"] > 0 and batch_interval and batch_interval > 0:
+                    log.info(f"[AI筛选] 批次间隔等待 {batch_interval} 秒...")
+                    time.sleep(batch_interval)
+                batch = pending[i:i + batch_size]
+                titles_for_ai = [
+                    {"id": n["id"], "title": n["title"], "source": n.get("source_name", "")}
+                    for n in batch
+                ]
+                batch_results = ai_filter.classify_batch(titles_for_ai, active_tags, interests_content)
+                state["batches"] += 1
+                if batch_results is None:
+                    log.info(f"[AI筛选] {label}批次 {i // batch_size + 1}: {len(batch)} 条 → 分类失败，将在下次运行重试")
+                    state["consecutive"] += 1
+                    if state["consecutive"] >= 2:
+                        state["stopped"] = f"连续 {state['consecutive']} 批分类失败（疑似 AI 服务不可用）"
+                    continue
+                state["consecutive"] = 0
+                for r in batch_results:
+                    r["source_type"] = source_type
+                total_results.extend(batch_results)
+                succeeded.extend(n["id"] for n in batch)
+                log.info(f"[AI筛选] {label}批次 {i // batch_size + 1}: {len(batch)} 条 → {len(batch_results)} 条匹配")
+            return succeeded
 
-        succeeded_rss_ids = []
-        for i in range(0, len(pending_rss), batch_size):
-            if batch_count > 0 and batch_interval > 0:
-                import time
-                log.info(f"[AI筛选] 批次间隔等待 {batch_interval} 秒...")
-                time.sleep(batch_interval)
-            batch = pending_rss[i:i + batch_size]
-            titles_for_ai = [
-                {"id": n["id"], "title": n["title"], "source": n.get("source_name", "")}
-                for n in batch
-            ]
-            batch_results = ai_filter.classify_batch(titles_for_ai, active_tags, interests_content)
-            batch_count += 1
-            if batch_results is None:
-                log.info(f"[AI筛选] RSS 批次 {i // batch_size + 1}: {len(batch)} 条 → 分类失败，将在下次运行重试")
-                continue
-            for r in batch_results:
-                r["source_type"] = "rss"
-            total_results.extend(batch_results)
-            succeeded_rss_ids.extend(n["id"] for n in batch)
-            log.info(f"[AI筛选] RSS 批次 {i // batch_size + 1}: {len(batch)} 条 → {len(batch_results)} 条匹配")
+        succeeded_news_ids = run(pending_news, "hotlist", "热榜")
+        succeeded_rss_ids = run(pending_rss, "rss", "RSS ")
 
         return total_results, succeeded_news_ids, succeeded_rss_ids
 

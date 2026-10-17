@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from trendradar.ai import settings
 from trendradar.ai.client import AIClient
 from trendradar.ai.prompt_loader import load_prompt_template
 
@@ -47,19 +48,20 @@ class AIFilter:
         get_time_func: Callable,
         debug: bool = False,
     ):
-        self.client = AIClient(ai_config)
+        # 按功能解析模型/温度（env AI_FILTER_MODEL > env AI_MODEL > yaml ai.filter_model > ai.model）
+        self.client = AIClient(settings.feature_ai_config(ai_config, "filter"))
         self.filter_config = filter_config
-        self.batch_size = filter_config.get("BATCH_SIZE", 200)
+        self.batch_size = filter_config.get("BATCH_SIZE", 30)
         self.get_time_func = get_time_func
         self.debug = debug
 
         # 加载提示词模板
         self.classify_system, self.classify_user = load_prompt_template(
-            filter_config.get("PROMPT_FILE", "ai_filter_prompt.txt"),
+            filter_config.get("PROMPT_FILE", "prompt.txt"),
             config_subdir="ai_filter", label="AI筛选",
         )
         self.extract_system, self.extract_user = load_prompt_template(
-            filter_config.get("EXTRACT_PROMPT_FILE", "ai_filter_extract_prompt.txt"),
+            filter_config.get("EXTRACT_PROMPT_FILE", "extract_prompt.txt"),
             config_subdir="ai_filter", label="AI筛选",
         )
         self.update_tags_system, self.update_tags_user = load_prompt_template(
@@ -342,9 +344,12 @@ class AIFilter:
             for t in tags
         )
 
-        # 构建新闻列表文本
+        # 构建新闻列表文本（标题单行化，防止换行伪造编号行）
+        def _one_line(v):
+            return " ".join(str(v or "").split())
+
         news_list = "\n".join(
-            f"{t['id']}. [{t.get('source', '')}] {t['title']}"
+            f"{t['id']}. [{_one_line(t.get('source', ''))}] {_one_line(t['title'])}"
             for t in titles
         )
 
@@ -392,8 +397,12 @@ class AIFilter:
         response: str,
         titles: List[Dict],
         tags: List[Dict],
-    ) -> List[Dict]:
+    ) -> Optional[List[Dict]]:
         """解析分类的 AI 响应
+
+        解析失败（无 JSON / JSON 损坏且 json_repair 无法修复 / 顶层不是数组）返回 None，
+        由流水线视为"调用失败"、不标记已分析、下次重试；只有合法的空数组才表示"无匹配"。
+        news id / tag_id 兼容字符串数字（"12" → 12）。
 
         支持两种 JSON 格式：
         - 新格式（扁平）: [{"id": 1, "tag_id": 1, "score": 0.9}, ...]
@@ -403,22 +412,45 @@ class AIFilter:
         """
         json_str = self._extract_json(response)
         if not json_str:
-            if self.debug:
-                log.info(f"[AI筛选][DEBUG] 无法从分类响应中提取 JSON，原始响应前 500 字符: {(response or '')[:500]}")
-            return []
+            log.info(f"[AI筛选] 无法从分类响应中提取 JSON，本批按失败处理（下次重试）: {(response or '')[:120]}")
+            return None
 
+        data = None
         try:
             data = json.loads(json_str)
         except json.JSONDecodeError as e:
             if self.debug:
                 log.info(f"[AI筛选][DEBUG] 分类响应 JSON 解析失败: {e}")
                 log.info(f"[AI筛选][DEBUG] 提取的 JSON 文本前 500 字符: {json_str[:500]}")
-            return []
+            try:
+                from json_repair import repair_json
+                repaired = repair_json(json_str, return_objects=True)
+                if isinstance(repaired, list):
+                    data = repaired
+                    log.info("[AI筛选] JSON 本地修复成功（json_repair）")
+            except Exception:
+                data = None
+            if data is None:
+                log.info("[AI筛选] 分类响应 JSON 解析失败，本批按失败处理（下次重试）")
+                return None
 
+        if isinstance(data, dict):
+            # 兼容 {"results": [...]} / {"items": [...]} 包裹形态
+            for key in ("results", "items", "data", "news"):
+                if isinstance(data.get(key), list):
+                    data = data[key]
+                    break
         if not isinstance(data, list):
-            if self.debug:
-                log.info(f"[AI筛选][DEBUG] 分类响应顶层不是数组，实际类型: {type(data).__name__}")
-            return []
+            log.info(f"[AI筛选] 分类响应顶层不是数组（{type(data).__name__}），本批按失败处理（下次重试）")
+            return None
+
+        def _as_int(v):
+            if isinstance(v, bool):
+                return None
+            try:
+                return int(str(v).strip())
+            except (TypeError, ValueError):
+                return None
 
         # 构建 id 映射
         title_ids = {t["id"] for t in titles}
@@ -435,7 +467,7 @@ class AIFilter:
         for item in data:
             if not isinstance(item, dict):
                 continue
-            news_id = item.get("id")
+            news_id = _as_int(item.get("id"))
             if news_id not in title_ids:
                 skipped_news_ids += 1
                 continue
@@ -466,7 +498,7 @@ class AIFilter:
             for tag_match in candidates:
                 if not isinstance(tag_match, dict):
                     continue
-                tag_id = tag_match.get("tag_id")
+                tag_id = _as_int(tag_match.get("tag_id"))
                 if tag_id not in tag_id_set:
                     skipped_tag_ids += 1
                     continue
