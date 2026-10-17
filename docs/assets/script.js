@@ -7,6 +7,25 @@
 const EDITOR_LINE_HEIGHT = 19.5;  // 编辑器行高（px），用于滚动定位计算
 
 // ==========================================
+// 安全：所有来自配置文件（导入/拖拽/localStorage/远程拉取）的值，
+// 写进 innerHTML 模板前必须经过下面的转义函数，防止 DOM XSS。
+//   escHtml(s) → 用于 HTML 文本与属性值
+//   escJs(s)   → 用于 onclick="fn('${...}')" 这类「HTML 属性里的 JS 字符串」
+// ==========================================
+function escHtml(s) {
+    return String(s ?? '').replace(/[&<>"'`]/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '`': '&#96;'
+    }[c]));
+}
+function escJs(s) {
+    return escHtml(String(s ?? '')
+        .replace(/\\/g, '\\\\')
+        .replace(/'/g, "\\'")
+        .replace(/\r?\n/g, '\\n')
+        .replace(/</g, '\\x3c'));
+}
+
+// ==========================================
 // 0. 注释高亮功能
 // ==========================================
 
@@ -137,9 +156,11 @@ const REMOTE_PATHS = {
  * 返回首个成功的 Response；全部失败则抛出最后一个错误。
  */
 async function fetchRepoFile(path) {
+    // raw.githubusercontent 优先：jsDelivr 对分支引用（@master）缓存可达 ~12h，
+    // 「加载最新配置」会拿到半天前的版本；jsDelivr 只作为国内网络下的回退。
     const sources = [
-        `https://cdn.jsdelivr.net/gh/${REPO_OWNER}/${REPO_NAME}@${REPO_BRANCH}/${path}`,
-        `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/refs/heads/${REPO_BRANCH}/${path}`
+        `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/refs/heads/${REPO_BRANCH}/${path}`,
+        `https://cdn.jsdelivr.net/gh/${REPO_OWNER}/${REPO_NAME}@${REPO_BRANCH}/${path}`
     ];
     let lastErr;
     for (const url of sources) {
@@ -680,10 +701,11 @@ function showToast(message, type = 'info') {
         warning: 'fa-exclamation-triangle'
     };
 
-    toast.innerHTML = `
-        <i class="fa-solid ${icons[type] || icons.info}"></i>
-        <span>${message}</span>
-    `;
+    const icon = document.createElement('i');
+    icon.className = `fa-solid ${icons[type] || icons.info}`;
+    const span = document.createElement('span');
+    span.textContent = String(message ?? '');  // 消息里常含配置值，必须当纯文本
+    toast.append(icon, span);
 
     document.body.appendChild(toast);
 
@@ -1754,7 +1776,7 @@ function renderFrequencyPanel(data) {
                             ${indexBadge}
                             <span class="text-[10px] bg-orange-500 text-white px-2 py-0.5 rounded font-bold">组别名</span>
                             ${relatedGroupBadge}
-                            <input type="text" value="${group.name || ''}" placeholder="组别名（如：东亚）"
+                            <input type="text" value="${escHtml(group.name || '')}" placeholder="组别名（如：东亚）"
                                    class="text-sm font-bold border-0 border-b-2 border-orange-300 focus:border-orange-500 outline-none px-2 py-1 flex-1 bg-transparent"
                                    onclick="event.stopPropagation()"
                                    onchange="updateGroupName(${idx}, this.value)">
@@ -1771,7 +1793,7 @@ function renderFrequencyPanel(data) {
                                 const escapedKw = kw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
                                 return `
                                     <span class="tag-item ${getKeywordClass(kw)} relative break-all cursor-pointer" data-keyword="${escapedKw}" onclick="editKeyword(${idx}, this.dataset.keyword, this)">
-                                        ${label ? `<span class="text-[9px] opacity-75 mr-1">[${label}]</span>` : ''}
+                                        ${label ? `<span class="text-[9px] opacity-75 mr-1">[${escHtml(label)}]</span>` : ''}
                                         ${escapedKw}
                                         <button data-keyword="${escapedKw}" onclick="event.stopPropagation(); removeKeyword(${idx}, this.dataset.keyword)">×</button>
                                     </span>
@@ -1807,11 +1829,11 @@ function renderFrequencyPanel(data) {
                     </div>
                     <div class="bg-white rounded p-3 border border-teal-200 editable-area" onclick="event.stopPropagation()">
                         <div class="flex items-center gap-2">
-                            <input type="text" value="${item.keyword || ''}" placeholder="/正则/ 或 关键词"
+                            <input type="text" value="${escHtml(item.keyword || '')}" placeholder="/正则/ 或 关键词"
                                    class="flex-1 px-3 py-2 border border-gray-300 rounded focus:border-teal-500 outline-none text-sm font-mono"
                                    onblur="updateAliasItem(${idx}, 0, 'keyword', this.value)">
                             <span class="text-teal-600 font-bold">=></span>
-                            <input type="text" value="${item.alias || ''}" placeholder="别名"
+                            <input type="text" value="${escHtml(item.alias || '')}" placeholder="别名"
                                    class="flex-1 px-3 py-2 border border-gray-300 rounded focus:border-teal-500 outline-none text-sm"
                                    onblur="updateAliasItem(${idx}, 0, 'alias', this.value)">
                         </div>
@@ -1847,11 +1869,11 @@ function renderFrequencyPanel(data) {
                         </div>
                         ${group.items.map((item, itemIdx) => `
                             <div class="flex items-center gap-2">
-                                <input type="text" value="${item.keyword || ''}" placeholder="/正则/ 或 关键词"
+                                <input type="text" value="${escHtml(item.keyword || '')}" placeholder="/正则/ 或 关键词"
                                        class="flex-1 px-3 py-2 border border-gray-300 rounded focus:border-purple-500 outline-none text-sm font-mono"
                                        onblur="updateAliasItem(${idx}, ${itemIdx}, 'keyword', this.value)">
                                 <span class="text-purple-600 font-bold">=></span>
-                                <input type="text" value="${item.alias || ''}" placeholder="别名"
+                                <input type="text" value="${escHtml(item.alias || '')}" placeholder="别名"
                                        class="flex-1 px-3 py-2 border border-gray-300 rounded focus:border-purple-500 outline-none text-sm"
                                        onblur="updateAliasItem(${idx}, ${itemIdx}, 'alias', this.value)">
                                 <button onclick="removeAliasItem(${idx}, ${itemIdx})" class="text-red-500 hover:text-red-700 text-xs">
@@ -1892,7 +1914,7 @@ function renderFrequencyPanel(data) {
                                 const escapedKw = kw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
                                 return `
                                     <span class="tag-item ${getKeywordClass(kw)} relative break-all cursor-pointer" data-keyword="${escapedKw}" onclick="editKeyword(${idx}, this.dataset.keyword, this)">
-                                        ${label ? `<span class="text-[9px] opacity-75 mr-1">[${label}]</span>` : ''}
+                                        ${label ? `<span class="text-[9px] opacity-75 mr-1">[${escHtml(label)}]</span>` : ''}
                                         ${escapedKw}
                                         <button data-keyword="${escapedKw}" onclick="event.stopPropagation(); removeKeyword(${idx}, this.dataset.keyword)">×</button>
                                     </span>
@@ -1960,8 +1982,8 @@ function renderFrequencyPanel(data) {
             <div id="global-filter-tags" class="tag-input-container">
                 ${data.globalFilter.map(f => `
                     <span class="tag-item ${getKeywordClass(f)}">
-                        ${f}
-                        <button onclick="removeGlobalFilter('${f.replace(/'/g, "\\'")}')">×</button>
+                        ${escHtml(f)}
+                        <button onclick="removeGlobalFilter('${escJs(f)}')">×</button>
                     </span>
                 `).join('')}
                 <input type="text" class="tag-input" placeholder="输入过滤词后按回车..." onkeydown="handleGlobalFilterInput(event)">
@@ -2441,8 +2463,8 @@ function renderPlatformsList() {
         <div class="platform-item flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2 border border-gray-200 hover:border-blue-300 transition-colors" data-index="${idx}">
             <div class="flex items-center gap-2">
                 <i class="fa-solid fa-grip-vertical text-gray-300 cursor-move"></i>
-                <span class="text-xs font-medium text-gray-700">${p.name}</span>
-                <span class="text-[10px] text-gray-400">(${p.id})</span>
+                <span class="text-xs font-medium text-gray-700">${escHtml(p.name)}</span>
+                <span class="text-[10px] text-gray-400">(${escHtml(p.id)})</span>
             </div>
             <button onclick="removePlatform(${idx})" class="text-red-400 hover:text-red-600 text-xs" title="删除">
                 <i class="fa-solid fa-trash"></i>
@@ -2650,18 +2672,18 @@ function renderDisplayRegionsList() {
     const regions = parseDisplayRegionsFromYaml();
 
     container.innerHTML = regions.map((r, idx) => `
-        <div class="display-region-item flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2 border border-gray-200 hover:border-blue-300 transition-colors" data-key="${r.key}">
+        <div class="display-region-item flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2 border border-gray-200 hover:border-blue-300 transition-colors" data-key="${escHtml(r.key)}">
             <div class="flex items-center gap-2">
                 <i class="fa-solid fa-grip-vertical text-gray-300 cursor-move"></i>
-                <span class="text-xs font-medium ${r.enabled ? 'text-gray-700' : 'text-gray-400'}">${r.label}</span>
-                <span class="text-[10px] text-gray-400">(${r.key})</span>
+                <span class="text-xs font-medium ${r.enabled ? 'text-gray-700' : 'text-gray-400'}">${escHtml(r.label)}</span>
+                <span class="text-[10px] text-gray-400">(${escHtml(r.key)})</span>
             </div>
             <div class="relative inline-block w-10 align-middle select-none">
-                <input type="checkbox" id="toggle-region-${r.key}"
+                <input type="checkbox" id="toggle-region-${escHtml(r.key)}"
                        ${r.enabled ? 'checked' : ''}
-                       onchange="toggleDisplayRegion('${r.key}')"
+                       onchange="toggleDisplayRegion('${escJs(r.key)}')"
                        class="toggle-checkbox absolute block w-4 h-4 mt-0.5 ml-0.5 rounded-full bg-white border-4 appearance-none cursor-pointer transition-all duration-200 ease-in-out"/>
-                <label for="toggle-region-${r.key}" class="toggle-label block overflow-hidden h-5 rounded-full bg-gray-300 cursor-pointer"></label>
+                <label for="toggle-region-${escHtml(r.key)}" class="toggle-label block overflow-hidden h-5 rounded-full bg-gray-300 cursor-pointer"></label>
             </div>
         </div>
     `).join('');
@@ -2868,8 +2890,8 @@ function renderRssFeedsList() {
             <div class="flex items-center justify-between">
                 <div class="flex items-center gap-2 flex-1 min-w-0">
                     <i class="fa-solid fa-rss text-orange-400"></i>
-                    <span class="text-xs font-medium text-gray-700 truncate">${f.name}</span>
-                    <span class="text-[10px] text-gray-400">(${f.id})</span>
+                    <span class="text-xs font-medium text-gray-700 truncate">${escHtml(f.name)}</span>
+                    <span class="text-[10px] text-gray-400">(${escHtml(f.id)})</span>
                     ${f.enabled === false ? '<span class="text-[9px] bg-gray-200 text-gray-500 px-1 rounded">已禁用</span>' : ''}
                 </div>
                 <div class="flex items-center gap-1">
@@ -2884,7 +2906,7 @@ function renderRssFeedsList() {
                     </button>
                 </div>
             </div>
-            <div class="text-[10px] text-gray-400 mt-1 truncate" title="${f.url}">${f.url}</div>
+            <div class="text-[10px] text-gray-400 mt-1 truncate" title="${escHtml(f.url)}">${escHtml(f.url)}</div>
         </div>
     `).join('');
 }
@@ -3133,11 +3155,11 @@ function renderStandaloneLists() {
             const isChecked = standaloneConfig.platforms.includes(p.id);
             return `
                 <label class="flex items-center gap-2 p-1.5 rounded hover:bg-white transition-colors cursor-pointer">
-                    <input type="checkbox" onchange="toggleStandaloneItem('platforms', '${p.id}')"
+                    <input type="checkbox" onchange="toggleStandaloneItem('platforms', '${escJs(p.id)}')"
                            ${isChecked ? 'checked' : ''} class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
                     <div class="min-w-0">
-                        <div class="text-xs font-medium text-gray-700 truncate">${p.name}</div>
-                        <div class="text-[9px] text-gray-400 truncate">${p.id}</div>
+                        <div class="text-xs font-medium text-gray-700 truncate">${escHtml(p.name)}</div>
+                        <div class="text-[9px] text-gray-400 truncate">${escHtml(p.id)}</div>
                     </div>
                 </label>
             `;
@@ -3152,14 +3174,14 @@ function renderStandaloneLists() {
             const isChecked = standaloneConfig.rss_feeds.includes(f.id);
             return `
                 <label class="flex items-center gap-2 p-1.5 rounded hover:bg-white transition-colors cursor-pointer">
-                    <input type="checkbox" onchange="toggleStandaloneItem('rss_feeds', '${f.id}')"
+                    <input type="checkbox" onchange="toggleStandaloneItem('rss_feeds', '${escJs(f.id)}')"
                            ${isChecked ? 'checked' : ''} class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
                     <div class="min-w-0 flex-1">
                         <div class="flex items-center justify-between">
-                            <span class="text-xs font-medium text-gray-700 truncate">${f.name}</span>
-                            <span class="text-[9px] text-gray-400 ml-2">${f.id}</span>
+                            <span class="text-xs font-medium text-gray-700 truncate">${escHtml(f.name)}</span>
+                            <span class="text-[9px] text-gray-400 ml-2">${escHtml(f.id)}</span>
                         </div>
-                        <div class="text-[9px] text-gray-400 truncate">${f.url}</div>
+                        <div class="text-[9px] text-gray-400 truncate">${escHtml(f.url)}</div>
                     </div>
                 </label>
             `;
@@ -3398,12 +3420,12 @@ function showVersionComparisonModal(fileName, currentVersion, latestVersion) {
                 <div class="flex items-center justify-between text-sm">
                     <span class="text-gray-600">当前版本</span>
                     <span class="font-mono font-bold ${currentVersion ? 'text-blue-600' : 'text-gray-400'}">
-                        ${currentVersion ? 'v' + currentVersion : '未知'}
+                        ${currentVersion ? 'v' + escHtml(currentVersion) : '未知'}
                     </span>
                 </div>
                 <div class="flex items-center justify-between text-sm">
                     <span class="text-gray-600">最新版本</span>
-                    <span class="font-mono font-bold text-green-600">v${latestVersion}</span>
+                    <span class="font-mono font-bold text-green-600">v${escHtml(latestVersion)}</span>
                 </div>
             </div>
 
@@ -3544,8 +3566,8 @@ function renderAvailablePlatforms() {
                         <i class="fa-solid fa-cube"></i>
                     </div>
                     <div>
-                        <div class="font-bold text-gray-800 text-sm">${p.name}</div>
-                        <div class="text-xs text-gray-400 font-mono">${p.key}</div>
+                        <div class="font-bold text-gray-800 text-sm">${escHtml(p.name)}</div>
+                        <div class="text-xs text-gray-400 font-mono">${escHtml(p.key)}</div>
                     </div>
                 </div>
                 <button class="text-gray-300 group-hover:text-blue-600">
@@ -3709,18 +3731,73 @@ const DAY_NAMES = ['周一', '周二', '周三', '周四', '周五', '周六', '
 function getActivePreset() {
     try {
         const doc = jsyaml.load(currentYaml);
-        return doc?.schedule?.preset || 'morning_evening';
+        const preset = doc?.schedule?.preset || 'morning_evening';
+        // preset 名会被拼进 onclick 等 JS 字符串，只接受安全标识符
+        return TL_SAFE_KEY.test(String(preset)) ? String(preset) : 'morning_evening';
     } catch { return 'morning_evening'; }
 }
 
 /**
  * 解析 timeline YAML，返回结构化数据
  */
+// timeline 里的 preset / period / day_plan 键会作为标识符拼进 onclick 等
+// JS 字符串与 id 属性。这里在解析出口统一过滤：只保留 [A-Za-z0-9_-] 组成的键，
+// 其余（通常是恶意构造的配置）丢弃并告警，下游模板即可安全地直接插值这些键。
+const TL_SAFE_KEY = /^[A-Za-z0-9_-]+$/;
+let _tlUnsafeWarned = false;
+
+function sanitizeTimelineDoc(doc) {
+    if (!doc || typeof doc !== 'object') return doc;
+    const dropped = [];
+    const cleanKeys = (obj, where) => {
+        if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return obj;
+        const out = {};
+        for (const [k, v] of Object.entries(obj)) {
+            if (TL_SAFE_KEY.test(k)) out[k] = v; else dropped.push(where + k);
+        }
+        return out;
+    };
+    const cleanCfg = (cfg) => {
+        if (!cfg || typeof cfg !== 'object') return cfg;
+        const c = { ...cfg };
+        if ('periods' in cfg) c.periods = cleanKeys(cfg.periods, 'periods.');
+        if ('day_plans' in cfg) {
+            c.day_plans = cleanKeys(cfg.day_plans, 'day_plans.');
+            for (const [k, plan] of Object.entries(c.day_plans || {})) {
+                if (plan && Array.isArray(plan.periods)) {
+                    c.day_plans[k] = { ...plan, periods: plan.periods.filter(x => TL_SAFE_KEY.test(String(x))) };
+                }
+            }
+        }
+        if (cfg.week_map && typeof cfg.week_map === 'object') {
+            const w = {};
+            for (const [d, v] of Object.entries(cfg.week_map)) {
+                if (TL_SAFE_KEY.test(String(v))) w[d] = v; else dropped.push('week_map.' + d);
+            }
+            c.week_map = w;
+        }
+        return c;
+    };
+    const out = { ...doc };
+    if (doc.presets && typeof doc.presets === 'object') {
+        const presets = cleanKeys(doc.presets, 'presets.');
+        for (const k of Object.keys(presets || {})) presets[k] = cleanCfg(presets[k]);
+        out.presets = presets;
+    }
+    if (doc.custom) out.custom = cleanCfg(doc.custom);
+    if (dropped.length && !_tlUnsafeWarned) {
+        _tlUnsafeWarned = true;
+        console.warn('timeline.yaml 中以下键包含非法字符，已在可视化面板中忽略：', dropped);
+        try { showToast('timeline.yaml 有键名包含非法字符，已在可视化面板中忽略（详见控制台）', 'warning'); } catch (e) { /* ignore */ }
+    }
+    return out;
+}
+
 function parseTimelineData() {
     try {
         const doc = jsyaml.load(currentTimeline);
         if (!doc) return null;
-        return doc;
+        return sanitizeTimelineDoc(doc);
     } catch { return null; }
 }
 
@@ -3778,8 +3855,8 @@ function syncTimelineToUI() {
                 <div class="flex items-center gap-3 cursor-pointer" onclick="selectTimelinePreset('${name}')">
                     <div class="tl-card-icon ${meta.bg} ${meta.color}"><i class="fa-solid ${meta.icon}"></i></div>
                     <div class="flex-1 min-w-0">
-                        <div class="text-sm font-bold text-gray-800 truncate tl-editable" ondblclick="event.stopPropagation();tlInlineEdit(this,'${name}','name','${escapeAttr(label)}')">${label}</div>
-                        <div class="text-[10px] text-gray-500 truncate tl-editable" ondblclick="event.stopPropagation();tlInlineEdit(this,'${name}','description','${escapeAttr(desc)}')">${desc}</div>
+                        <div class="text-sm font-bold text-gray-800 truncate tl-editable" ondblclick="event.stopPropagation();tlInlineEdit(this,'${name}','name','${escapeAttr(label)}')">${escHtml(label)}</div>
+                        <div class="text-[10px] text-gray-500 truncate tl-editable" ondblclick="event.stopPropagation();tlInlineEdit(this,'${name}','description','${escapeAttr(desc)}')">${escHtml(desc)}</div>
                     </div>
                 </div>
                 <div class="tl-card-actions">
@@ -3810,7 +3887,7 @@ function syncTimelineToUI() {
     if (!config) {
         html += `<div class="text-center py-6 text-gray-400 text-sm">
             <i class="fa-solid fa-triangle-exclamation text-amber-400 mr-1"></i>
-            未找到预设「${activePreset}」的配置
+            未找到预设「${escHtml(activePreset)}」的配置
         </div>`;
         panel.innerHTML = html;
         return;
@@ -3880,9 +3957,9 @@ function renderWeekView(config, presetName) {
                 const label = p.name || pName;
                 html += `<div class="tl-period-block ${colorClass}" style="left:${left}%;width:${width}%"
                               onclick="scrollToPeriodCard('${pName}')"
-                              onmouseenter="showTlTooltip(event, '${escapeAttr(label)}', '${p.start||''}', '${p.end||''}', ${!!merged.push}, ${!!merged.analyze}, '${merged.report_mode||''}')"
+                              onmouseenter="showTlTooltip(event, '${escapeAttr(label)}', '${escapeAttr(p.start||'')}', '${escapeAttr(p.end||'')}', ${!!merged.push}, ${!!merged.analyze}, '${escapeAttr(merged.report_mode||'')}')"
                               onmouseleave="hideTlTooltip()">
-                    <span class="tl-block-label">${label}</span>
+                    <span class="tl-block-label">${escHtml(label)}</span>
                 </div>`;
             });
         });
@@ -3955,7 +4032,8 @@ function parseTime(str) {
 }
 
 function escapeAttr(s) {
-    return (s || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+    // 用在 HTML 属性里的 JS 字符串字面量：先 JS 转义再 HTML 转义
+    return escJs(s);
 }
 
 /**
@@ -3972,10 +4050,10 @@ function showTlTooltip(event, name, start, end, push, analyze, mode) {
     if (analyze) features.push('<span style="color:#c4b5fd">分析</span>');
     if (!push && !analyze) features.push('<span style="color:#94a3b8">仅采集</span>');
 
-    el.innerHTML = `<div style="font-weight:700;margin-bottom:2px">${name}</div>
-        <div style="font-size:11px;color:#9ca3af">${start} - ${end}</div>
+    el.innerHTML = `<div style="font-weight:700;margin-bottom:2px">${escHtml(name)}</div>
+        <div style="font-size:11px;color:#9ca3af">${escHtml(start)} - ${escHtml(end)}</div>
         <div style="margin-top:4px">${features.join(' / ')}</div>
-        ${mode ? `<div style="font-size:10px;color:#9ca3af;margin-top:2px">模式: ${mode}</div>` : ''}`;
+        ${mode ? `<div style="font-size:10px;color:#9ca3af;margin-top:2px">模式: ${escHtml(mode)}</div>` : ''}`;
 
     document.body.appendChild(el);
     tlTooltipEl = el;
@@ -4042,11 +4120,11 @@ function renderPeriodDetails(config, presetName) {
                 <div class="flex items-center justify-between mb-2">
                     <div class="flex items-center gap-2">
                         <div class="w-3 h-3 rounded ${colorClass}"></div>
-                        <span class="text-sm font-bold text-gray-800 tl-editable" ondblclick="tlInlineEditPeriod(this,'${presetName}','${key}','${escapeAttr(p.name || key)}')">${p.name || key}</span>
+                        <span class="text-sm font-bold text-gray-800 tl-editable" ondblclick="tlInlineEditPeriod(this,'${presetName}','${key}','${escapeAttr(p.name || key)}')">${escHtml(p.name || key)}</span>
                         <span class="text-[10px] text-gray-400 font-mono">${key}</span>
                     </div>
                     <div class="flex items-center gap-2">
-                        <span class="text-xs text-gray-500 font-mono">${p.start || '?'} - ${p.end || '?'}</span>
+                        <span class="text-xs text-gray-500 font-mono">${escHtml(p.start || '?')} - ${escHtml(p.end || '?')}</span>
                         <button onclick="duplicateTlPeriod('${presetName}','${key}')" class="tl-inline-btn" title="复制"><i class="fa-regular fa-copy"></i></button>
                         <button onclick="deleteTlPeriod('${presetName}','${key}')" class="tl-inline-btn text-red-400 hover:text-red-600" title="删除"><i class="fa-regular fa-trash-can"></i></button>
                     </div>
@@ -4088,14 +4166,14 @@ function renderPeriodDetails(config, presetName) {
                         const merged = p ? mergeWithDefault(p, defaults) : {};
                         const cc = getBlockColorClass(merged);
                         return `<span class="tl-period-tag ${cc}" data-period-key="${pn}">
-                            ${p?.name || pn}
+                            ${escHtml(p?.name || pn)}
                             <button onclick="removePeriodFromDayPlanUI('${presetName}','${name}','${pn}')" class="tl-tag-remove" title="移除">&times;</button>
                         </span>`;
                     }).join('') : '<span class="text-[10px] text-gray-400">空 (全天走 default)</span>'}
                     ${availablePeriods.length > 0 ? `
                         <select class="tl-add-period-select" onchange="if(this.value){addPeriodToDayPlan('${presetName}','${name}',this.value);this.value=''}">
                             <option value="">+ 添加</option>
-                            ${availablePeriods.map(([k, p]) => `<option value="${k}">${p.name || k}</option>`).join('')}
+                            ${availablePeriods.map(([k, p]) => `<option value="${k}">${escHtml(p.name || k)}</option>`).join('')}
                         </select>
                     ` : ''}
                 </div>
@@ -4254,10 +4332,10 @@ function renderBehaviorToggles(cfg, presetName, periodKey, rawCfg = null) {
     if (periodKey !== 'default' && (cfg.start || cfg.end)) {
         html += `<div class="flex items-center gap-2 mt-2">
             <span class="text-[10px] text-gray-400">时间:</span>
-            <input type="time" value="${cfg.start || ''}" class="text-xs border border-gray-200 rounded px-1.5 py-0.5"
+            <input type="time" value="${escHtml(cfg.start || '')}" class="text-xs border border-gray-200 rounded px-1.5 py-0.5"
                    onchange="onTlSelect('${presetName}','${periodKey}','start',this.value)">
             <span class="text-gray-300">~</span>
-            <input type="time" value="${cfg.end || ''}" class="text-xs border border-gray-200 rounded px-1.5 py-0.5"
+            <input type="time" value="${escHtml(cfg.end || '')}" class="text-xs border border-gray-200 rounded px-1.5 py-0.5"
                    onchange="onTlSelect('${presetName}','${periodKey}','end',this.value)">
         </div>`;
     }
@@ -4283,13 +4361,13 @@ function renderBehaviorToggles(cfg, presetName, periodKey, rawCfg = null) {
             </div>
             <div>
                 <label class="block text-[10px] text-gray-400 mb-1">frequency_file</label>
-                <input type="text" value="${frequencyFile}" placeholder="如 tech.txt"
+                <input type="text" value="${escHtml(frequencyFile)}" placeholder="如 tech.txt"
                        class="text-[10px] w-full border border-gray-200 rounded px-1.5 py-1 bg-white"
                        onchange="onTlOptionalInput('${presetName}','${periodKey}','frequency_file',this.value)">
             </div>
             <div>
                 <label class="block text-[10px] text-gray-400 mb-1">interests_file</label>
-                <input type="text" value="${interestsFile}" placeholder="如 geopolitics.txt"
+                <input type="text" value="${escHtml(interestsFile)}" placeholder="如 geopolitics.txt"
                        class="text-[10px] w-full border border-gray-200 rounded px-1.5 py-1 bg-white"
                        onchange="onTlOptionalInput('${presetName}','${periodKey}','interests_file',this.value)">
             </div>
@@ -4919,11 +4997,11 @@ window.openTlNewPresetModal = function() {
     if (data?.presets) {
         Object.keys(data.presets).forEach(k => {
             const name = data.presets[k]?.name || k;
-            sel.innerHTML += `<option value="${k}">${name} (${k})</option>`;
+            sel.add(new Option(`${name} (${k})`, k));
         });
     }
     if (data?.custom) {
-        sel.innerHTML += `<option value="custom">${data.custom.name || '自定义'} (custom)</option>`;
+        sel.add(new Option(`${data.custom.name || '自定义'} (custom)`, 'custom'));
     }
     // 清空输入
     document.getElementById('tl-new-preset-key').value = '';
@@ -5708,7 +5786,7 @@ window.onTlBarClick = function(event, presetName, dayNum) {
     const el = document.createElement('div');
     el.className = 'tl-tooltip';
     el.innerHTML = `<div style="font-weight:700;margin-bottom:2px">${DAY_NAMES[dayNum - 1]}</div>
-        <div style="font-size:11px;color:#9ca3af">日计划: <strong style="color:#374151">${planKey}</strong></div>
+        <div style="font-size:11px;color:#9ca3af">日计划: <strong style="color:#374151">${escHtml(planKey)}</strong></div>
         <div style="font-size:10px;color:#9ca3af;margin-top:4px">使用 default 配置</div>`;
 
     document.body.appendChild(el);
