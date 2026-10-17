@@ -25,7 +25,7 @@
 #   TrendRadar 不是一直在后台运行的，而是被「定时闹钟」周期性唤醒：
 #
 #     GitHub Actions 用户 → 由 .github/workflows/crawler.yml 中的 cron 定时触发
-#                           默认每小时运行一次（如每小时第 33 分钟）
+#                           本仓库为每小时 :05 / :35 两次（GitHub 实际会稀疏、延迟触发）
 #
 #     Docker 用户         → 由 docker/.env 中的 CRON_SCHEDULE 定时触发
 #                           默认每 30 分钟运行一次
@@ -396,7 +396,12 @@ presets:
 
 custom:
   name: "早晚各一次"
-  description: "全天静默采集；早 07:30~08:30 推一次当前热榜，晚 20:30~21:30 推一次当日汇总。"
+  description: "全天静默采集；早 06:00~10:00 推一次当前热榜，晚 19:00~23:59 推一次当日汇总。"
+  # 为什么窗口这么宽：GitHub Actions 的 schedule 实际每天只触发 4~6 次、时刻不规则，
+  # 60 分钟窗口近 30 天命中率仅 23%~30%。按同期真实触发记录回放：
+  #   早 06:00-10:00 命中 28/28 天，晚 19:00-23:59 命中 23/28 天。
+  # 不使用外部 cron（Cloudflare Cron 配额已满）。窗口内只推一次靠 once 防重，
+  # 其执行记录在 output/news/<date>.db，由 crawler.yml 的 actions/cache 跨运行保留。
 
   # 默认 ── 不在任何时间段时：只采集，不分析，不推送
   default:
@@ -412,8 +417,8 @@ custom:
   periods:
     morning_brief:
       name: "早班速览"
-      start: "07:30"
-      end: "08:30"
+      start: "06:00"
+      end: "10:00"
       collect: true
       analyze: true
       ai_mode: "current"
@@ -425,8 +430,8 @@ custom:
 
     evening_summary:
       name: "晚间汇总"
-      start: "20:30"
-      end: "21:30"
+      start: "19:00"
+      end: "23:59"                  # 不跨日：once 记录按自然日记账，跨日窗口会在 00:00 后重复推送
       collect: true
       analyze: true
       ai_mode: "daily"
