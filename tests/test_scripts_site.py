@@ -138,3 +138,23 @@ def test_build_trends_uses_relative_home_link(site):
     s = (site / "reports" / "trends.html").read_text(encoding="utf-8")
     assert '<a href="../">' in s and 'href="/"' not in s
     assert "北京时间" in s
+
+
+# ── check_state ───────────────────────────────────────────────────────
+def test_check_state_reports_and_warns(tmp_path, monkeypatch, capsys):
+    import sqlite3
+    monkeypatch.chdir(tmp_path)
+    mod = load("check_state")
+    monkeypatch.setattr(mod, "now_site", lambda: __import__("datetime").datetime(2026, 10, 18, 12, 0))
+    assert mod.main(["x", "after-crawl"]) == 0           # 没有任何库也不能抛异常
+    assert "::warning::" in capsys.readouterr().out
+    (tmp_path / "output" / "news").mkdir(parents=True)
+    con = sqlite3.connect(tmp_path / "output" / "news" / "2026-10-18.db")
+    con.execute("CREATE TABLE crawl_records (id INTEGER)")
+    con.execute("CREATE TABLE period_executions (id INTEGER)")
+    con.executemany("INSERT INTO crawl_records VALUES (?)", [(1,), (2,), (3,)])
+    con.commit()
+    con.close()
+    assert mod.main(["x", "after-crawl"]) == 0
+    out = capsys.readouterr().out
+    assert "今日抓取记录 3" in out and "::warning::" not in out
