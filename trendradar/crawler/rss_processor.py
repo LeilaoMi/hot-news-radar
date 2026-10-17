@@ -51,6 +51,8 @@ class RSSProcessor:
         self.source_total = 0
         self.source_failed = 0
         self.total_count = 0
+        # 本轮抓取的整体错误（依赖缺失 / 抓取器异常），供编排层判断是否告警
+        self.last_error: Optional[str] = None
 
     # ------------------------------------------------------------------
     # 抓取
@@ -59,27 +61,48 @@ class RSSProcessor:
         self, report_mode: str, rank_threshold: int, frequency_file: str
     ) -> Tuple[Optional[List[Dict]], Optional[List[Dict]], Optional[List[Dict]], set]:
         """
-        执行 RSS 数据抓取
+        执行 RSS 数据抓取并按模式处理（兼容旧调用；新代码请分别调用 fetch / process_by_mode，
+        以便在调度器覆盖 report_mode 之后再做模式处理）
 
         Returns:
-            (rss_items, rss_new_items, raw_rss_items, rss_new_urls) 元组：
-            - rss_items: 统计条目列表（按模式处理，用于统计区块）
-            - rss_new_items: 新增条目列表（用于新增区块）
-            - raw_rss_items: 原始 RSS 条目列表（用于独立展示区）
-            - rss_new_urls: 原始新增 RSS 条目的 URL 集合（用于 AI 模式 is_new 检测）
-            如果未启用或失败返回 (None, None, None, set())
+            (rss_items, rss_new_items, raw_rss_items, rss_new_urls) 元组，未启用或失败返回
+            (None, None, None, set())
         """
-        if not self.ctx.rss_enabled:
+        rss_data = self.fetch()
+        if rss_data is None:
             return None, None, None, set()
+        return self.process_by_mode(rss_data, report_mode, rank_threshold, frequency_file)
+
+    def fetch(self):
+        """
+        只抓取 RSS 并保存到存储后端（与报告模式无关）
+
+        Returns:
+            RSSData；未启用 / 未配置 / 抓取器整体异常时返回 None
+
+        Raises:
+            StorageError: 抓取成功但写入存储失败（致命，交由编排层以非零退出码结束）
+        """
+        from trendradar.core.errors import StorageError
+
+        self.last_error = None
+        if not self.ctx.rss_enabled:
+            return None
 
         rss_feeds = self.ctx.rss_feeds
         if not rss_feeds:
             log.info("[RSS] 未配置任何 RSS 源")
-            return None, None, None, set()
+            return None
 
         try:
             from trendradar.crawler.rss import RSSFetcher, RSSFeedConfig
+        except ImportError as e:
+            self.last_error = f"缺少依赖: {e}"
+            log.warning(f"[RSS] 缺少依赖: {e}")
+            log.info("[RSS] 请安装 feedparser: pip install feedparser")
+            return None
 
+        try:
             # 构建 RSS 源配置
             feeds = []
             for feed_config in rss_feeds:
@@ -111,17 +134,15 @@ class RSSProcessor:
 
             if not feeds:
                 log.info("[RSS] 没有启用的 RSS 源")
-                return None, None, None, set()
+                return None
 
             # 创建抓取器
             rss_config = self.ctx.rss_config
             # RSS 代理：优先使用 RSS 专属代理，否则使用爬虫默认代理
             rss_proxy_url = rss_config.get("PROXY_URL", "") or self.proxy_url or ""
-            # 获取配置的时区
             from trendradar.utils.time import DEFAULT_TIMEZONE
 
             timezone = self.ctx.config.get("TIMEZONE", DEFAULT_TIMEZONE)
-            # 获取新鲜度过滤配置
             freshness_config = rss_config.get("FRESHNESS_FILTER", {})
             freshness_enabled = freshness_config.get("ENABLED", True)
             default_max_age_days = freshness_config.get("MAX_AGE_DAYS", 3)
@@ -137,29 +158,31 @@ class RSSProcessor:
                 default_max_age_days=default_max_age_days,
             )
 
-            # 抓取数据
             rss_data = fetcher.fetch_all()
-
-            self.source_total = len(feeds)
-            self.source_failed = len(rss_data.failed_ids)
-
-            # 保存到存储后端
-            if self.storage_manager.save_rss_data(rss_data):
-                log.info("[RSS] 数据已保存到存储后端")
-
-                # 处理 RSS 数据（按模式过滤）并返回用于合并推送
-                return self.process_by_mode(rss_data, report_mode, rank_threshold, frequency_file)
-            else:
-                log.info("[RSS] 数据保存失败")
-                return None, None, None, set()
-
-        except ImportError as e:
-            log.info(f"[RSS] 缺少依赖: {e}")
-            log.info("[RSS] 请安装 feedparser: pip install feedparser")
-            return None, None, None, set()
         except Exception as e:
-            log.info(f"[RSS] 抓取失败: {e}")
-            return None, None, None, set()
+            # 抓取器整体异常（不是存储失败）：本轮 RSS 缺失，按部分失败处理
+            self.last_error = f"抓取失败: {type(e).__name__}: {e}"
+            log.warning(f"[RSS] 抓取失败: {e}")
+            return None
+
+        self.source_total = len(feeds)
+        self.source_failed = len(rss_data.failed_ids)
+
+        # 保存到存储后端：失败属于致命错误，不再静默吞掉
+        if not self.storage_manager.save_rss_data(rss_data):
+            raise StorageError("RSS 数据保存到存储后端失败")
+        log.info("[RSS] 数据已保存到存储后端")
+        return rss_data
+
+    def load_latest_from_storage(self, date: Optional[str] = None):
+        """RENDER_ONLY：从存储读取最近一批 RSS 数据（不抓取、不写库），用于按模式重渲染。"""
+        if not self.ctx.rss_enabled:
+            return None
+        rss_data = self.storage_manager.get_latest_rss_data(date)
+        if rss_data is not None:
+            self.source_total = len(self.ctx.rss_feeds or [])
+            self.source_failed = len(getattr(rss_data, "failed_ids", []) or [])
+        return rss_data
 
     # ------------------------------------------------------------------
     # 按模式分流

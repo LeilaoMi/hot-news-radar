@@ -8,7 +8,7 @@ RSS HTML 报告渲染模块
 from datetime import datetime
 from typing import Dict, List, Optional, Callable
 
-from trendradar.report.helpers import html_escape
+from trendradar.report.helpers import REPORT_CSP_META, html_escape, render_link
 
 
 def render_rss_html_content(
@@ -41,6 +41,7 @@ def render_rss_html_content(
     <html>
     <head>
         <meta charset="UTF-8">
+        """ + REPORT_CSP_META + """
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>RSS 订阅内容</title>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" integrity="sha512-BNaRQnYJYiPSqHHDb58B0yaPfCu+Wgds8Gp/gU33kqBtgNS4tSPHuGibyoeqMV/TJlSKda6FXzoEyYGjTe+vXA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
@@ -293,7 +294,7 @@ def render_rss_html_content(
         <div class="container">
             <div class="header">
                 <div class="save-buttons">
-                    <button class="save-btn" onclick="saveAsImage()">保存为图片</button>
+                    <button class="save-btn" onclick="saveAsImage(event)">保存为图片</button>
                 </div>
                 <div class="header-title">RSS 订阅内容</div>
                 <div class="header-info">
@@ -370,11 +371,8 @@ def render_rss_html_content(
                         </div>
                         <div class="rss-title">"""
 
-            if url:
-                escaped_url = html_escape(url)
-                html += f'<a href="{escaped_url}" target="_blank" class="rss-link">{escaped_title}</a>'
-            else:
-                html += escaped_title
+            # 协议白名单：非 http(s) 链接只输出纯文本（防 javascript:/data: XSS）
+            html += render_link(url, escaped_title, "rss-link")
 
             html += """
                         </div>"""
@@ -396,7 +394,7 @@ def render_rss_html_content(
             <div class="footer">
                 <div class="footer-content">
                     由 <span class="project-name">TrendRadar</span> 生成 ·
-                    <a href="https://github.com/sansan0/TrendRadar" target="_blank" class="footer-link">
+                    <a href="https://github.com/sansan0/TrendRadar" target="_blank" rel="noopener noreferrer" class="footer-link">
                         GitHub 开源项目
                     </a>
                 </div>
@@ -404,8 +402,9 @@ def render_rss_html_content(
         </div>
 
         <script>
-            async function saveAsImage() {
-                const button = event.target;
+            async function saveAsImage(evt) {
+                // 不依赖已废弃的全局 window.event
+                const button = (evt && (evt.currentTarget || evt.target)) || document.querySelector('.save-btn');
                 const originalText = button.textContent;
 
                 try {

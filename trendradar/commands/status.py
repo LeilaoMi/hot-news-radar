@@ -39,16 +39,20 @@ def handle_status_commands(config: Dict) -> None:
         print(f"  报告模式: {schedule.report_mode}")
         print(f"  AI 模式:  {schedule.ai_mode}")
 
-        if schedule.period_key:
-            print("\n🔁 一次性控制:")
+        once_key = schedule.once_key
+        if once_key and (schedule.once_analyze or schedule.once_push):
+            print("\n🔁 一次性控制（按窗口计，跨午夜时段归属窗口起始日）:")
             if schedule.once_analyze:
-                already_analyzed = scheduler.already_executed(schedule.period_key, "analyze", date_str)
-                print(f"  AI 分析:  仅一次 {'(今日已执行 ⚠️)' if already_analyzed else '(今日未执行 ✅)'}")
+                if schedule.period_key:
+                    already_analyzed = scheduler.already_executed(schedule.period_key, "analyze", date_str)
+                    print(f"  AI 分析:  仅一次 {'(本窗口已执行 ⚠️)' if already_analyzed else '(本窗口未执行 ✅)'}")
+                else:
+                    print("  AI 分析:  仅一次（默认时段的分析去重由 AI 层负责，按时间段生效）")
             else:
                 print("  AI 分析:  不限次数")
             if schedule.once_push:
-                already_pushed = scheduler.already_executed(schedule.period_key, "push", date_str)
-                print(f"  推送通知: 仅一次 {'(今日已执行 ⚠️)' if already_pushed else '(今日未执行 ✅)'}")
+                already_pushed = scheduler.already_executed(once_key, "push", date_str)
+                print(f"  推送通知: 仅一次 {'(本窗口已执行 ⚠️)' if already_pushed else '(本窗口未执行 ✅)'}")
             else:
                 print("  推送通知: 不限次数")
 

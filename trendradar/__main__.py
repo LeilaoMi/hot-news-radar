@@ -8,6 +8,7 @@ TrendRadar 主程序
 
 import argparse
 import os
+import sys
 import webbrowser
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,8 +31,61 @@ from trendradar.ai import AIAnalysisResult
 from trendradar.ai.analysis_service import AIAnalysisService
 from trendradar.ai.dedup import AIDeduplicator
 from trendradar.core.scheduler import ResolvedSchedule
+from trendradar.core.errors import (
+    EXIT_FATAL,
+    EXIT_OK,
+    EXIT_PARTIAL,
+    NoDataError,
+    ReportError,
+    StorageError,
+)
+from trendradar.core.logger import get_logger, log_exception
 from trendradar.commands import check_all_versions, run_doctor, run_test_notification, handle_status_commands
-from trendradar.commands.version import _fetch_remote_version, _parse_version
+
+log = get_logger(__name__)
+
+
+class RunStatus:
+    """一次运行的健康状况汇总，决定进程退出码。
+
+    - fatal：致命失败 → 退出码 1
+    - partial：超过阈值的部分失败 → 退出码 2
+    - warnings：只告警，不影响退出码
+    在 GitHub Actions 中输出 ::error:: / ::warning:: 注解，便于在运行摘要里直接看到。
+    """
+
+    def __init__(self, github_actions: bool = False):
+        self.github_actions = github_actions
+        self.fatal_errors: List[str] = []
+        self.partial_errors: List[str] = []
+        self.warnings: List[str] = []
+
+    def _emit(self, level: str, msg: str) -> None:
+        if self.github_actions:
+            print(f"::{level}::{msg}")
+        else:
+            prefix = {"error": "❌", "warning": "⚠️"}.get(level, "")
+            print(f"{prefix} {msg}")
+
+    def warn(self, msg: str) -> None:
+        self.warnings.append(msg)
+        self._emit("warning", msg)
+
+    def partial(self, msg: str) -> None:
+        self.partial_errors.append(msg)
+        self._emit("warning", msg)
+
+    def fatal(self, msg: str) -> None:
+        self.fatal_errors.append(msg)
+        self._emit("error", msg)
+
+    @property
+    def exit_code(self) -> int:
+        if self.fatal_errors:
+            return EXIT_FATAL
+        if self.partial_errors:
+            return EXIT_PARTIAL
+        return EXIT_OK
 
 
 
@@ -154,7 +208,14 @@ class NewsAnalyzer:
         self.data_fetcher = DataFetcher(
             self.proxy_url,
             api_url=self.ctx.config.get("PLATFORMS_API_URL") or None,
+            max_cache_age=self.ctx.config.get("MAX_CACHE_AGE_SECONDS"),
         )
+        # 运行健康状况（决定退出码）
+        self.status = RunStatus(self.is_github_actions)
+        # RENDER_ONLY：不抓取、不调用 AI、不推送，只用存储里已有数据重渲染 HTML
+        self.render_only = bool(self.ctx.config.get("RENDER_ONLY", False))
+        if self.render_only:
+            self._apply_render_only_overrides()
 
         # 报告头部元数据
         # 说明：RSS 相关的 source_total / source_failed / total_count 已移交
@@ -175,19 +236,42 @@ class NewsAnalyzer:
         # 注意：update_info 由 main() 函数设置，避免重复请求远程版本
 
     def _init_storage_manager(self) -> None:
-        """初始化存储管理器（使用 AppContext）"""
-        # 获取数据保留天数（支持环境变量覆盖）
-        env_retention = os.environ.get("STORAGE_RETENTION_DAYS", "").strip()
-        if env_retention:
-            # 环境变量覆盖配置
-            self.ctx.config["STORAGE"]["RETENTION_DAYS"] = int(env_retention)
+        """初始化存储管理器（使用 AppContext）
 
+        STORAGE_RETENTION_DAYS 环境变量已在 loader 中映射到 LOCAL/REMOTE.RETENTION_DAYS
+        （之前写入的 STORAGE.RETENTION_DAYS 存储层从不读取，等于不生效）。
+        """
         self.storage_manager = self.ctx.get_storage_manager()
         print(f"存储后端: {self.storage_manager.backend_name}")
 
-        retention_days = self.ctx.config.get("STORAGE", {}).get("RETENTION_DAYS", 0)
-        if retention_days > 0:
-            print(f"数据保留天数: {retention_days} 天")
+        storage_cfg = self.ctx.config.get("STORAGE", {})
+        local_days = storage_cfg.get("LOCAL", {}).get("RETENTION_DAYS", 0) or 0
+        remote_days = storage_cfg.get("REMOTE", {}).get("RETENTION_DAYS", 0) or 0
+        if local_days > 0:
+            print(f"本地数据保留天数: {local_days} 天")
+        if remote_days > 0:
+            print(f"远程数据保留天数: {remote_days} 天")
+
+    def _apply_render_only_overrides(self) -> None:
+        """RENDER_ONLY 下关闭所有对外副作用：推送、AI 分析/翻译/去重/AI 筛选、AI 日报。
+
+        直接改本次进程内的配置副本（AppContext 持有），让下游所有门控自然生效，
+        不需要在 AI / 通知层增加参数。
+        """
+        cfg = self.ctx.config
+        cfg["ENABLE_NOTIFICATION"] = False
+        for key in ("AI_ANALYSIS", "AI_TRANSLATION", "AI_DEDUP"):
+            if isinstance(cfg.get(key), dict):
+                cfg[key]["ENABLED"] = False
+        if isinstance(cfg.get("AI_DAILY"), dict):
+            cfg["AI_DAILY"]["ENABLED"] = False
+        # 只渲染的唯一产物就是 HTML，强制开启
+        if isinstance(cfg.get("STORAGE"), dict) and isinstance(cfg["STORAGE"].get("FORMATS"), dict):
+            cfg["STORAGE"]["FORMATS"]["HTML"] = True
+        if isinstance(cfg.get("FILTER"), dict) and cfg["FILTER"].get("METHOD") == "ai":
+            print("[只渲染] AI 智能筛选需要调用模型，本次改用关键词筛选")
+            cfg["FILTER"]["METHOD"] = "keyword"
+        print("[只渲染] RENDER_ONLY=true：跳过抓取 / AI 分析与翻译 / 全部推送，只用存储中已有数据渲染 HTML")
 
     def _detect_docker_environment(self) -> bool:
         """检测是否运行在 Docker 容器中"""
@@ -204,7 +288,7 @@ class NewsAnalyzer:
 
     def _should_open_browser(self) -> bool:
         """判断是否应该打开浏览器"""
-        return not self.is_github_actions and not self.is_docker_container
+        return not self.is_github_actions and not self.is_docker_container and not getattr(self, "render_only", False)
 
     def _setup_proxy(self) -> None:
         """设置代理配置"""
@@ -215,24 +299,6 @@ class NewsAnalyzer:
             print("本地环境，未启用代理")
         else:
             print("GitHub Actions环境，不使用代理")
-
-    def _set_update_info_from_config(self) -> None:
-        """从已缓存的远程版本设置更新信息（不再重复请求）"""
-        try:
-            version_url = self.ctx.config.get("VERSION_CHECK_URL", "")
-            if not version_url:
-                return
-
-            remote_version = _fetch_remote_version(version_url, self.proxy_url)
-            if remote_version:
-                need_update = _parse_version(__version__) < _parse_version(remote_version)
-                if need_update:
-                    self.update_info = {
-                        "current_version": __version__,
-                        "remote_version": remote_version,
-                    }
-        except Exception as e:
-            print(f"版本检查出错: {e}")
 
     def _get_mode_strategy(self) -> Dict:
         """获取当前模式的策略配置"""
@@ -410,6 +476,14 @@ class NewsAnalyzer:
                 standalone_data=standalone_data
             )
 
+        if (
+            ai_result is not None
+            and not getattr(ai_result, "success", False)
+            and not getattr(ai_result, "skipped", False)
+        ):
+            # AI 失败不影响发布，但不能悄无声息
+            self.status.warn(f"AI 分析失败（报告将不含 AI 分析）: {getattr(ai_result, 'error', '')}")
+
         # AI 日报（P2-3）：daily 轮次把 AI 分析结果生成为独立日报页，
         # 落盘 output/html/ai-daily/ 随项目网页发布；仅生成网页，不推送
         ai_daily_config = self.ctx.config.get("AI_DAILY", {})
@@ -474,7 +548,13 @@ class NewsAnalyzer:
                     "rss_source_failed": self._rss.source_failed,
                 },
                 translate_report_func=translate_report_func,
+                # RENDER_ONLY 只更新 latest/{mode}.html：不产生新的时间戳快照（不伪装成一次新抓取），
+                # 也不覆盖 index.html 入口
+                write_snapshot=not self.render_only,
+                write_index=not self.render_only,
             )
+            if not html_file:
+                raise ReportError("HTML 报告生成失败：未返回文件路径")
 
         return stats, html_file, ai_result, rss_items, standalone_data, rss_new_items
 
@@ -507,11 +587,31 @@ class NewsAnalyzer:
         news_count = sum(len(stat.get("titles", [])) for stat in stats) if stats else 0
         rss_count = sum(stat.get("count", 0) for stat in rss_items) if rss_items else 0
 
+        if getattr(self, "render_only", False):
+            print("[推送] RENDER_ONLY：跳过全部推送")
+            return False
+
         if (
             cfg["ENABLE_NOTIFICATION"]
             and has_notification
             and has_any_content
         ):
+            # 调度系统决策（先判断调度，避免窗口外的每次运行都打印误导性的「准备发送」）
+            if not schedule.push:
+                print("[推送] 调度器: 当前时间段不执行推送")
+                return False
+
+            once_key = schedule.once_key if schedule.once_push else None
+            period_label = schedule.period_name or schedule.period_key or "默认时段"
+            if once_key:
+                scheduler = self.ctx.create_scheduler()
+                date_str = self.ctx.format_date()
+                if scheduler.already_executed(once_key, "push", date_str):
+                    print(f"[推送] 调度器: 时间段 {period_label} 本窗口已推送过，跳过")
+                    return False
+                else:
+                    print(f"[推送] 调度器: 时间段 {period_label} 本窗口首次推送")
+
             # 输出推送内容统计
             content_parts = []
             if news_count > 0:
@@ -520,20 +620,6 @@ class NewsAnalyzer:
                 content_parts.append(f"RSS {rss_count} 条")
             total_count = news_count + rss_count
             print(f"[推送] 准备发送：{' + '.join(content_parts)}，合计 {total_count} 条")
-
-            # 调度系统决策
-            if not schedule.push:
-                print("[推送] 调度器: 当前时间段不执行推送")
-                return False
-
-            if schedule.once_push and schedule.period_key:
-                scheduler = self.ctx.create_scheduler()
-                date_str = self.ctx.format_date()
-                if scheduler.already_executed(schedule.period_key, "push", date_str):
-                    print(f"[推送] 调度器: 时间段 {schedule.period_name or schedule.period_key} 今天已推送过，跳过")
-                    return False
-                else:
-                    print(f"[推送] 调度器: 时间段 {schedule.period_name or schedule.period_key} 今天首次推送")
 
             # AI 分析：优先使用传入的结果，避免重复分析
             if ai_result is None:
@@ -582,12 +668,30 @@ class NewsAnalyzer:
 
             # 记录推送成功
             if any(results.values()):
-                if schedule.once_push and schedule.period_key:
+                if once_key:
                     scheduler = self.ctx.create_scheduler()
                     date_str = self.ctx.format_date()
-                    scheduler.record_execution(schedule.period_key, "push", date_str)
+                    scheduler.record_execution(once_key, "push", date_str)
+                failed_channels = [k for k, v in results.items() if not v]
+                if failed_channels:
+                    self.status.warn(f"部分推送渠道发送失败: {', '.join(map(str, failed_channels))}")
+                return True
 
-            return True
+            # 全部渠道失败：不再假装成功
+            self.status.warn(f"所有推送渠道发送失败: {', '.join(map(str, results.keys()))}")
+            # once_analyze 在 AI 层分析成功时就已记账；推送失败时撤销本轮记账，
+            # 让同一窗口的下一次运行重新分析，而不是推送一份「无 AI 分析」的版本
+            if (
+                schedule.once_analyze and schedule.period_key
+                and ai_result is not None and getattr(ai_result, "success", False)
+            ):
+                try:
+                    scheduler = self.ctx.create_scheduler()
+                    if scheduler.clear_execution(schedule.period_key, "analyze", self.ctx.format_date()):
+                        print("[调度] 推送失败，已撤销本窗口的 AI 分析记录，下次运行将重新分析")
+                except Exception as e:  # noqa: BLE001 - 撤销失败不影响主流程
+                    log_exception(log, "[调度] 撤销 AI 分析记录失败", e)
+            return False
 
         elif cfg["ENABLE_NOTIFICATION"] and not has_notification:
             print("⚠️ 警告：通知功能已启用但未配置任何通知渠道，将跳过通知发送")
@@ -614,11 +718,18 @@ class NewsAnalyzer:
     def _initialize_and_check_config(self) -> bool:
         """通用初始化和配置检查。返回 True 表示可以继续执行。"""
         now = self.ctx.get_time()
-        print(f"当前北京时间: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"当前时间（{self.ctx.timezone}）: {now.strftime('%Y-%m-%d %H:%M:%S')}")
 
-        if not self.ctx.config["ENABLE_CRAWLER"]:
-            print("爬虫功能已禁用（ENABLE_CRAWLER=False），程序退出")
+        if self.render_only:
+            print(f"报告模式: {self.report_mode}（只渲染）")
+            return True
+
+        # platforms.enabled=false 只跳过热榜抓取，RSS 照常运行（与 timeline.yaml 文档一致）
+        if not self.ctx.config["ENABLE_CRAWLER"] and not self.ctx.rss_enabled:
+            print("热榜（platforms.enabled=false）与 RSS 均未启用，没有可执行的任务，程序退出")
             return False
+        if not self.ctx.config["ENABLE_CRAWLER"]:
+            print("热榜抓取已禁用（platforms.enabled=false），本次只处理 RSS")
 
         has_notification = self._has_notification_configured()
         if not self.ctx.config["ENABLE_NOTIFICATION"]:
@@ -633,8 +744,40 @@ class NewsAnalyzer:
         print(f"运行模式: {mode_strategy['description']}")
         return True
 
+    def _resolve_schedule(self) -> ResolvedSchedule:
+        """在进程启动时（抓取之前）解析一次调度并应用覆盖。
+
+        - 抓取需要 200~350 s，之前在抓取之后才解析，窗口边界附近的运行会被判到窗口外；
+        - RSS 的按模式处理必须使用覆盖后的 report_mode / frequency_file
+          （晚间 daily 窗口对 RSS 同样生效）。
+        """
+        scheduler = self.ctx.create_scheduler()
+        schedule = scheduler.resolve()
+
+        effective_mode = schedule.report_mode
+        if effective_mode != self.report_mode:
+            print(f"[调度] 报告模式覆盖: {self.report_mode} -> {effective_mode}")
+        self.report_mode = effective_mode
+        self.frequency_file = schedule.frequency_file
+        self.filter_method = schedule.filter_method or self.ctx.filter_method
+        if self.render_only and self.filter_method == "ai":
+            self.filter_method = "keyword"
+        self.interests_file = schedule.interests_file
+
+        # timeline 显式指定的 ai_mode 优先于全局 ai_analysis.mode（之前 ai_mode 只用于打印）
+        if schedule.ai_mode_explicit and schedule.day_plan != "disabled":
+            ai_cfg = self.ctx.config.get("AI_ANALYSIS")
+            if isinstance(ai_cfg, dict) and ai_cfg.get("MODE") != schedule.ai_mode:
+                print(f"[调度] AI 分析模式覆盖: {ai_cfg.get('MODE')} -> {schedule.ai_mode}")
+                ai_cfg["MODE"] = schedule.ai_mode
+        return schedule
+
     def _crawl_data(self) -> Tuple[Dict, Dict, List]:
-        """执行数据爬取"""
+        """执行数据爬取
+
+        Raises:
+            StorageError: 抓取结果写入存储失败
+        """
         ids = []
         domain_rules = {}
         for platform in self.ctx.platforms:
@@ -657,15 +800,18 @@ class NewsAnalyzer:
         )
 
         # 转换为 NewsData 格式并保存到存储后端
-        crawl_time = self.ctx.format_time()
-        crawl_date = self.ctx.format_date()
+        # 只取一次 now：分两次 format_time()/format_date() 在午夜边界可能把 23-59 写进次日库
+        now = self.ctx.get_time()
+        crawl_time = now.strftime("%H-%M")
+        crawl_date = now.strftime("%Y-%m-%d")
         news_data = convert_crawl_results_to_news_data(
             results, id_to_name, failed_ids, crawl_time, crawl_date
         )
 
-        # 保存到存储后端（SQLite）
-        if self.storage_manager.save_news_data(news_data):
-            print(f"数据已保存到存储后端: {self.storage_manager.backend_name}")
+        # 保存到存储后端（SQLite）：失败是致命错误，不能静默继续
+        if not self.storage_manager.save_news_data(news_data):
+            raise StorageError(f"热榜数据保存到存储后端失败（{self.storage_manager.backend_name}）")
+        print(f"数据已保存到存储后端: {self.storage_manager.backend_name}")
 
         # 保存 TXT 快照（如果启用）
         txt_file = self.storage_manager.save_txt_snapshot(news_data)
@@ -674,13 +820,55 @@ class NewsAnalyzer:
 
         return results, id_to_name, failed_ids
 
-    def _crawl_rss_data(self) -> Tuple[Optional[List[Dict]], Optional[List[Dict]], Optional[List[Dict]], set]:
-        """执行 RSS 数据抓取（实现已迁至 crawler/rss_processor.py）"""
-        return self._rss.crawl(
-            report_mode=self.report_mode,
-            rank_threshold=self.rank_threshold,
-            frequency_file=self.frequency_file,
+    def _evaluate_hotlist_health(self, results: Dict, failed_ids: List) -> bool:
+        """评估热榜抓取结果，返回是否有可用热榜数据。
+
+        - 全部平台失败 → 致命（退出码 1），但流程继续以「仅 RSS」降级生成报告/推送；
+        - 部分失败 → warning；失败占比 >= PLATFORM_FAILURE_THRESHOLD（默认 1.0，不启用）→ 退出码 2。
+        """
+        total = len(self.ctx.platforms)
+        if total == 0:
+            return False
+        failed = len(failed_ids or [])
+        reasons = getattr(self.data_fetcher, "failure_reasons", {}) or {}
+        detail = "，".join(
+            f"{fid}({reasons[fid]})" if fid in reasons else str(fid) for fid in (failed_ids or [])
         )
+        if not results:
+            self.status.fatal(f"热榜全部 {total} 个平台抓取失败：{detail}（本轮降级为仅 RSS）")
+            return False
+        if failed:
+            ratio = failed / total
+            threshold = float(self.ctx.config.get("PLATFORM_FAILURE_THRESHOLD", 1.0) or 1.0)
+            msg = f"热榜 {failed}/{total} 个平台抓取失败：{detail}"
+            if ratio >= threshold:
+                self.status.partial(f"{msg}（失败占比 {ratio:.0%} ≥ 阈值 {threshold:.0%}）")
+            else:
+                self.status.warn(msg)
+        return True
+
+    def _crawl_rss_data(self) -> Tuple[Optional[List[Dict]], Optional[List[Dict]], Optional[List[Dict]], set]:
+        """执行 RSS 数据抓取并按**当前**（已被调度器覆盖的）report_mode 处理"""
+        rss_data = self._rss.fetch()
+        self._evaluate_rss_health(rss_data)
+        if rss_data is None:
+            return None, None, None, set()
+        return self._process_rss_data_by_mode(rss_data)
+
+    def _evaluate_rss_health(self, rss_data) -> None:
+        if not self.ctx.rss_enabled:
+            return
+        if self._rss.last_error:
+            self.status.warn(f"RSS {self._rss.last_error}")
+            return
+        if rss_data is None:
+            return
+        failed = self._rss.source_failed
+        total = self._rss.source_total
+        if total and failed >= total:
+            self.status.warn(f"RSS 全部 {total} 个源抓取失败")
+        elif failed:
+            self.status.warn(f"RSS {failed}/{total} 个源抓取失败: {', '.join(rss_data.failed_ids)}")
 
     def _process_rss_data_by_mode(self, rss_data) -> Tuple[Optional[List[Dict]], Optional[List[Dict]], Optional[List[Dict]], set]:
         """按报告模式处理 RSS 数据，返回与热榜相同格式的统计结构（实现已迁至 crawler/rss_processor.py）"""
@@ -839,53 +1027,32 @@ class NewsAnalyzer:
         )
 
     def _execute_mode_strategy(
-        self, mode_strategy: Dict, results: Dict, id_to_name: Dict, failed_ids: List,
+        self, schedule: ResolvedSchedule, results: Dict, id_to_name: Dict, failed_ids: List,
         rss_items: Optional[List[Dict]] = None,
         rss_new_items: Optional[List[Dict]] = None,
         raw_rss_items: Optional[List[Dict]] = None,
         rss_new_urls: Optional[set] = None,
+        hotlist_available: bool = True,
     ) -> Optional[str]:
         """执行模式特定逻辑，支持热榜+RSS合并推送
 
-        简化后的逻辑：
-        - 每次运行都生成 HTML 报告（时间戳快照 + latest/{mode}.html + index.html）
-        - 根据模式发送通知
+        - 调度已在 run() 开头解析并应用（见 _resolve_schedule）；
+        - 每次运行都生成 HTML 报告（时间戳快照 + latest/{mode}.html + index.html；
+          RENDER_ONLY 只写 latest/{mode}.html）；
+        - 根据模式发送通知（RENDER_ONLY 不推送）。
+        - hotlist_available=False（热榜全部失败 / 已禁用）时以空热榜降级，只展示 RSS。
         """
-        # 调度系统
-        scheduler = self.ctx.create_scheduler()
-        schedule = scheduler.resolve()
-
-        # 使用 schedule 决定的 report_mode 覆盖全局配置
-        effective_mode = schedule.report_mode
-        if effective_mode != self.report_mode:
-            print(f"[调度] 报告模式覆盖: {self.report_mode} -> {effective_mode}")
-        self.report_mode = effective_mode
-
         # 重新获取 mode_strategy，确保 report_type 与覆盖后的 report_mode 一致
         mode_strategy = self._get_mode_strategy()
 
-        # 使用 schedule 决定的 frequency_file 覆盖默认值
-        self.frequency_file = schedule.frequency_file
-
-        # 使用 schedule 决定的筛选策略覆盖默认值
-        self.filter_method = schedule.filter_method or self.ctx.filter_method
-
-        # 使用 schedule 决定的 AI 筛选兴趣文件覆盖默认值
-        self.interests_file = schedule.interests_file
-
-        # 如果调度器说不采集，则直接跳过
-        if not schedule.collect:
-            print("[调度] 当前时间段不执行数据采集，跳过分析流水线")
-            return None
         # 获取当前监控平台ID列表
         current_platform_ids = self.ctx.platform_ids
 
-        new_titles = self.ctx.detect_new_titles(current_platform_ids)
+        new_titles = self.ctx.detect_new_titles(current_platform_ids) if hotlist_available else {}
         time_info = self.ctx.format_time()
         word_groups, filter_words, global_filters = self.ctx.load_frequency_words(self.frequency_file)
 
         # current / daily 基于全天累计数据，incremental 只用本次抓取的数据。
-        # 两种来源各对应一个 helper，避免原先三份近乎逐字的分支各改各的。
         pipeline_kwargs = dict(
             word_groups=word_groups,
             filter_words=filter_words,
@@ -897,11 +1064,17 @@ class NewsAnalyzer:
             rss_new_urls=rss_new_urls,
         )
 
-        if self.report_mode == "current":
+        if not hotlist_available and self.report_mode != "daily":
+            # 热榜不可用：current/incremental 不能拿上一轮的数据冒充「当前榜单」，以空热榜降级
+            print("[热榜] 本轮无可用热榜数据，报告仅包含 RSS")
+            out = self._run_pipeline_on_current(
+                {}, id_to_name, {}, time_info, raw_rss_items, **pipeline_kwargs,
+            )
+        elif self.report_mode == "current":
             analysis_data = self._load_analysis_data()
             if not analysis_data:
                 print("❌ 严重错误：无法读取刚保存的数据文件")
-                raise RuntimeError("数据一致性检查失败：保存后立即读取失败")
+                raise StorageError("数据一致性检查失败：保存后立即读取失败")
             print(
                 "current模式：使用过滤后的历史数据，包含平台："
                 f"{list(analysis_data[0].keys())}"
@@ -917,27 +1090,25 @@ class NewsAnalyzer:
                 )
             else:
                 # 当天还没有历史数据（例如首跑）时降级为只用本次抓取的数据。
-                # 注意与 current 的区别：current 读不到刚写入的数据属于一致性故障，
-                # 必须报错而非静默降级，否则会推送出一份与榜单不符的报告。
                 out = self._run_pipeline_on_current(
                     results, id_to_name, new_titles, time_info,
                     raw_rss_items, **pipeline_kwargs,
                 )
-        else:
+        elif self.report_mode == "incremental":
             # incremental 模式：只使用当前抓取的数据
             out = self._run_pipeline_on_current(
                 results, id_to_name, new_titles, time_info,
                 raw_rss_items, **pipeline_kwargs,
             )
+        else:  # loader / scheduler 已校验，这里只是兜底
+            raise ValueError(f"未知的报告模式: {self.report_mode!r}")
 
         if out.html_file:
             print(f"HTML报告已生成: {out.html_file}")
             print(f"最新报告已更新: output/html/latest/{self.report_mode}.html")
 
-        # 发送通知
-        if mode_strategy["should_send_notification"]:
-            # standalone_data 已在分析流水线中翻译，直接复用（不再重新 prepare 原文，
-            # 避免覆盖译文、避免重复翻译，并保证网页报告与推送译文一致）
+        # 发送通知（RENDER_ONLY 在 _send_notification_if_needed 内部直接跳过）
+        if mode_strategy["should_send_notification"] and not self.render_only:
             self._send_notification_if_needed(
                 out.stats,
                 mode_strategy["report_type"],
@@ -964,38 +1135,110 @@ class NewsAnalyzer:
 
         return out.html_file
 
-    def run(self) -> None:
-        """执行分析流程"""
+    def _run_render_only(self, schedule: ResolvedSchedule) -> Optional[str]:
+        """RENDER_ONLY：不抓取、不写库，只用存储中已有数据重新渲染当前模式的 HTML。"""
+        if not self.ctx.platform_ids and not self.ctx.rss_enabled:
+            raise NoDataError("RENDER_ONLY：未配置任何热榜平台或 RSS，无可渲染内容")
+
+        latest = self.storage_manager.get_latest_crawl_data()
+        hotlist_available = bool(latest and latest.items)
+        failed_ids = list(getattr(latest, "failed_ids", []) or []) if latest else []
+        id_to_name = dict(getattr(latest, "id_to_name", {}) or {}) if latest else {}
+        results: Dict = {}
+        if hotlist_available:
+            for source_id, items in latest.items.items():
+                if source_id not in self.ctx.platform_ids:
+                    continue
+                results[source_id] = {}
+                for item in items:
+                    results[source_id][item.title] = {
+                        "ranks": item.ranks or [item.rank],
+                        "url": item.url or "",
+                        "mobileUrl": item.mobile_url or "",
+                    }
+
+        rss_items = rss_new_items = raw_rss_items = None
+        rss_new_urls: set = set()
+        rss_data = self._rss.load_latest_from_storage()
+        if rss_data is not None:
+            rss_items, rss_new_items, raw_rss_items, rss_new_urls = self._process_rss_data_by_mode(rss_data)
+
+        if not hotlist_available and not raw_rss_items and not rss_items:
+            raise NoDataError(
+                f"RENDER_ONLY：存储中没有 {self.ctx.format_date()} 的热榜或 RSS 数据，无法渲染"
+                f"（存储后端: {self.storage_manager.backend_name}）"
+            )
+
+        html_file = self._execute_mode_strategy(
+            schedule, results, id_to_name, failed_ids,
+            rss_items=rss_items, rss_new_items=rss_new_items,
+            raw_rss_items=raw_rss_items, rss_new_urls=rss_new_urls,
+            hotlist_available=hotlist_available,
+        )
+        if not html_file:
+            raise ReportError("RENDER_ONLY：HTML 未生成")
+        return html_file
+
+    def run(self) -> int:
+        """执行分析流程，返回进程退出码（0 成功 / 1 致命失败 / 2 部分失败超阈值）"""
         try:
             if not self._initialize_and_check_config():
-                return
+                return self.status.exit_code
 
-            mode_strategy = self._get_mode_strategy()
+            # 调度必须在抓取之前解析：窗口判定以进程启动时刻为准，
+            # 且 RSS 需要使用覆盖后的 report_mode / frequency_file
+            schedule = self._resolve_schedule()
 
-            # 抓取热榜数据
-            results, id_to_name, failed_ids = self._crawl_data()
+            if self.render_only:
+                self._run_render_only(schedule)
+                return self.status.exit_code
 
-            # 抓取 RSS 数据（如果启用），返回统计条目、新增条目和原始条目
+            if not schedule.collect:
+                print("[调度] 当前时间段不执行数据采集（collect=false），跳过抓取与分析流水线")
+                return self.status.exit_code
+
+            # 抓取热榜数据（platforms.enabled=false 时跳过，RSS 照常）
+            if self.ctx.config["ENABLE_CRAWLER"] and self.ctx.platforms:
+                results, id_to_name, failed_ids = self._crawl_data()
+                hotlist_available = self._evaluate_hotlist_health(results, failed_ids)
+            else:
+                results, id_to_name, failed_ids = {}, {}, []
+                hotlist_available = False
+
+            # 抓取 RSS 数据（如果启用），按覆盖后的模式处理
             rss_items, rss_new_items, raw_rss_items, rss_new_urls = self._crawl_rss_data()
 
             # 执行模式策略，传递 RSS 数据用于合并推送
             self._execute_mode_strategy(
-                mode_strategy, results, id_to_name, failed_ids,
+                schedule, results, id_to_name, failed_ids,
                 rss_items=rss_items, rss_new_items=rss_new_items,
-                raw_rss_items=raw_rss_items, rss_new_urls=rss_new_urls
+                raw_rss_items=raw_rss_items, rss_new_urls=rss_new_urls,
+                hotlist_available=hotlist_available,
             )
 
         except Exception as e:
-            print(f"分析流程执行出错: {e}")
+            log_exception(log, "分析流程执行出错", e)
+            self.status.fatal(f"运行失败: {type(e).__name__}: {e}")
             if self.ctx.config.get("DEBUG", False):
                 raise
         finally:
-            # 清理资源（包括过期数据清理和数据库连接关闭）
-            self.ctx.cleanup()
+            # 清理资源（RENDER_ONLY 不做过期数据清理，保持「只读」语义）
+            try:
+                if self.render_only:
+                    if self.ctx._storage_manager:
+                        self.ctx._storage_manager.cleanup()
+                        self.ctx._storage_manager = None
+                else:
+                    self.ctx.cleanup()
+            except Exception as e:  # noqa: BLE001
+                log_exception(log, "资源清理失败", e)
+                self.status.warn(f"资源清理失败: {e}")
+
+        return self.status.exit_code
 
 
-def main():
-    """主程序入口"""
+def main(argv: Optional[List[str]] = None) -> int:
+    """主程序入口，返回进程退出码（由 __main__ 调用 sys.exit）"""
     parser = argparse.ArgumentParser(
         description="TrendRadar - 热点新闻聚合与分析工具",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1006,8 +1249,17 @@ def main():
   --doctor               运行环境与配置体检
   --test-notification    发送测试通知到已配置渠道
 
+环境变量:
+  RENDER_ONLY=true       只用存储中已有数据渲染 HTML（不抓取 / 不调用 AI / 不推送）
+  NOTIFICATION_ENABLED   覆盖 notification.enabled
+  PLATFORM_FAILURE_THRESHOLD  热榜失败平台占比达到该值时退出码为 2（默认 1.0）
+
+退出码:
+  0 成功（部分平台失败只告警） 1 致命失败 2 部分失败超过阈值
+
 示例:
   python -m trendradar                    # 正常运行
+  RENDER_ONLY=true SCHEDULE_ENABLED=false REPORT_MODE=daily python -m trendradar
   python -m trendradar --show-schedule    # 查看当前调度状态
   python -m trendradar --doctor           # 运行一键体检
   python -m trendradar --test-notification # 测试通知渠道连通性
@@ -1017,35 +1269,32 @@ def main():
     parser.add_argument("--doctor", action="store_true", help="运行环境与配置体检")
     parser.add_argument("--test-notification", action="store_true", help="发送测试通知到已配置渠道")
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     debug_mode = False
     try:
         if args.doctor:
-            ok = run_doctor()
-            if not ok:
-                raise SystemExit(1)
-            return
+            return EXIT_OK if run_doctor() else EXIT_FATAL
 
         config = load_config()
+        debug_mode = bool(config.get("DEBUG", False))
 
         if args.show_schedule:
             handle_status_commands(config)
-            return
+            return EXIT_OK
 
         if args.test_notification:
-            ok = run_test_notification(config)
-            if not ok:
-                raise SystemExit(1)
-            return
-
-        version_url = config.get("VERSION_CHECK_URL", "")
-        configs_version_url = config.get("CONFIGS_VERSION_CHECK_URL", "")
+            return EXIT_OK if run_test_notification(config) else EXIT_FATAL
 
         need_update = False
         remote_version = None
-        if version_url:
-            need_update, remote_version = check_all_versions(version_url, configs_version_url)
+        version_url = config.get("VERSION_CHECK_URL", "")
+        configs_version_url = config.get("CONFIGS_VERSION_CHECK_URL", "")
+        if version_url and not config.get("RENDER_ONLY", False):
+            try:
+                need_update, remote_version = check_all_versions(version_url, configs_version_url)
+            except Exception as e:  # noqa: BLE001 - 版本检查失败不影响主流程
+                print(f"版本检查出错: {e}")
 
         analyzer = NewsAnalyzer(config=config)
 
@@ -1055,19 +1304,24 @@ def main():
                 "remote_version": remote_version,
             }
 
-        debug_mode = analyzer.ctx.config.get("DEBUG", False)
-        analyzer.run()
+        return analyzer.run()
     except FileNotFoundError as e:
         print(f"❌ 配置文件错误: {e}")
         print("\n请确保以下文件存在:")
         print("  • config/config.yaml")
         print("  • config/frequency_words.txt")
         print("\n参考项目文档进行正确配置")
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            print(f"::error::配置文件错误: {e}")
+        return EXIT_FATAL
     except Exception as e:
-        print(f"❌ 程序运行错误: {e}")
+        print(f"❌ 程序运行错误: {type(e).__name__}: {e}")
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            print(f"::error::程序运行错误: {type(e).__name__}: {e}")
         if debug_mode:
             raise
+        return EXIT_FATAL
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

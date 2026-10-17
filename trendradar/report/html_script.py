@@ -11,7 +11,7 @@ TAIL_FOOTER_HTML = """
             <div class="footer">
                 <div class="footer-content">
                     由 <span class="project-name">TrendRadar</span> 生成 ·
-                    <a href="https://github.com/sansan0/TrendRadar" target="_blank" class="footer-link">
+                    <a href="https://github.com/sansan0/TrendRadar" target="_blank" rel="noopener noreferrer" class="footer-link">
                         GitHub 开源项目
                     </a>"""
 
@@ -58,7 +58,7 @@ TAIL_SCRIPT_HTML = """
             }
 
             function initTabScroll(tabBar) {
-                var wrapper = tabBar.closest('.tab-bar-wrapper') || tabBar.parentNode;
+                var wrapper = tabBar.closest('.tab-bar-wrapper, .standalone-tab-wrapper') || tabBar.parentNode;
                 var leftArrow = wrapper.querySelector('.tab-arrow-left');
                 var rightArrow = wrapper.querySelector('.tab-arrow-right');
                 var indicator = wrapper.querySelector('.tab-scroll-indicator');
@@ -131,9 +131,14 @@ TAIL_SCRIPT_HTML = """
                         try { history.replaceState(null, '', '#all'); } catch(e) {}
                         return;
                     }
-                    var idx = parseInt(index);
+                    var idx = parseInt(index, 10);
+                    // #tab-99 / #tab-abc 等越界或非法值回退到第一个 Tab，避免宽屏下全部分组被隐藏
+                    var exists = !isNaN(idx) && Array.prototype.some.call(tabs, function(t) {
+                        return parseInt(t.dataset.tabIndex, 10) === idx;
+                    });
+                    if (!exists) idx = 0;
                     tabs.forEach(function(t) {
-                        if (parseInt(t.dataset.tabIndex) === idx) t.classList.add('active');
+                        if (parseInt(t.dataset.tabIndex, 10) === idx) t.classList.add('active');
                     });
                     if (document.body.classList.contains('wide-mode') && !wrapper.classList.contains('tab-hidden')) {
                         groups.forEach(function(g) {
@@ -142,7 +147,8 @@ TAIL_SCRIPT_HTML = """
                     }
                     var activeBtn = tabBar.querySelector('.tab-btn.active');
                     if (scroll !== false && activeBtn) activeBtn.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
-                    try { history.replaceState(null, '', '#tab-' + idx); } catch(e) {}
+                    // 只在用户交互时写 hash（初始化 activateTab(0, false) 不改写 URL）
+                    if (scroll !== false) { try { history.replaceState(null, '', '#tab-' + idx); } catch(e) {} }
                 }
 
                 tabs.forEach(function(tab) {
@@ -197,13 +203,25 @@ TAIL_SCRIPT_HTML = """
                     clearTimeout(timer);
                     timer = setTimeout(function() {
                         query = query.toLowerCase();
-                        document.querySelectorAll('.news-item').forEach(function(item) {
-                            var title = (item.querySelector('.news-title') || {}).textContent || '';
-                            item.style.display = (!query || title.toLowerCase().indexOf(query) !== -1) ? '' : 'none';
-                        });
-                        document.querySelectorAll('.rss-item').forEach(function(item) {
-                            var title = (item.querySelector('.rss-title') || {}).textContent || '';
-                            item.style.display = (!query || title.toLowerCase().indexOf(query) !== -1) ? '' : 'none';
+                        function filterItems(itemSel, titleSel) {
+                            document.querySelectorAll(itemSel).forEach(function(item) {
+                                var title = (item.querySelector(titleSel) || {}).textContent || '';
+                                item.style.display = (!query || title.toLowerCase().indexOf(query) !== -1) ? '' : 'none';
+                            });
+                        }
+                        filterItems('.news-item', '.news-title');
+                        filterItems('.rss-item', '.rss-title');
+                        filterItems('.new-item', '.new-item-title');
+                        // 命中为 0 的分组整体隐藏（清空搜索时恢复）
+                        document.querySelectorAll('.word-group, .new-source-group, .feed-group').forEach(function(group) {
+                            if (!query) { group.style.removeProperty('display'); group.classList.remove('search-empty'); return; }
+                            var items = group.querySelectorAll('.news-item, .rss-item, .new-item');
+                            if (!items.length) return;
+                            var visible = Array.prototype.some.call(items, function(it) { return it.style.display !== 'none'; });
+                            group.classList.toggle('search-empty', !visible);
+                            if (!visible) group.style.display = 'none';
+                            else if (group.classList.contains('word-group') && group.dataset.tabIndex !== undefined) { /* 宽屏 Tab 显隐由 Tab 逻辑控制 */ }
+                            else group.style.removeProperty('display');
                         });
                     }, 200);
                 };
@@ -317,7 +335,7 @@ TAIL_SCRIPT_HTML = """
                         g.style.display = '';
                     }
                 });
-                document.querySelectorAll('.tab-bar-wrapper, .standalone-tab-bar, .search-bar, .fab-bar, .toggle-wide-btn').forEach(function(el) {
+                document.querySelectorAll('.tab-bar-wrapper, .standalone-tab-wrapper, .standalone-tab-bar, .search-bar, .fab-bar, .toggle-wide-btn').forEach(function(el) {
                     el.dataset.prevDisplay = el.style.display || '';
                     el.style.display = 'none';
                 });
@@ -342,7 +360,7 @@ TAIL_SCRIPT_HTML = """
                         if (standaloneGroups[i]) standaloneGroups[i].style.display = 'none';
                     });
                 }
-                document.querySelectorAll('.tab-bar-wrapper, .standalone-tab-bar, .search-bar, .fab-bar, .toggle-wide-btn').forEach(function(el) {
+                document.querySelectorAll('.tab-bar-wrapper, .standalone-tab-wrapper, .standalone-tab-bar, .search-bar, .fab-bar, .toggle-wide-btn').forEach(function(el) {
                     el.style.display = el.dataset.prevDisplay || '';
                     delete el.dataset.prevDisplay;
                 });
@@ -528,6 +546,19 @@ TAIL_SCRIPT_HTML = """
                         });
                     }
 
+                    // RSS / 独立展示区 / AI 区也作为分割点（逐条计入，避免切点落在区块中间）
+                    container.querySelectorAll('.rss-section .rss-item, .rss-section .feed-header, .standalone-section .news-item, .standalone-section .standalone-name, .ai-section > *').forEach(el => {
+                        const rect = el.getBoundingClientRect();
+                        if (!rect.height) return;
+                        elements.push({
+                            type: 'block',
+                            element: el,
+                            top: rect.top - containerRect.top,
+                            bottom: rect.bottom - containerRect.top,
+                            height: rect.height
+                        });
+                    });
+
                     // 添加footer
                     const footerRect = footer.getBoundingClientRect();
                     elements.push({
@@ -537,6 +568,9 @@ TAIL_SCRIPT_HTML = """
                         bottom: footerRect.bottom - containerRect.top,
                         height: footer.offsetHeight
                     });
+
+                    // 按位置排序（header 固定在首位）
+                    elements.sort((a, b) => (a.type === 'header' ? -1 : b.type === 'header' ? 1 : a.top - b.top));
 
                     // 计算分割点
                     const segments = [];
@@ -697,6 +731,16 @@ TAIL_SCRIPT_HTML = """
                 }
 
                 // 提取 news-item 通用函数
+                function mdUrl(u) {
+                    // 只导出 http(s) 链接，并编码会破坏 Markdown 链接语法的字符
+                    if (!u || !/^https?:/i.test(String(u).trim())) return '';
+                    var v = String(u).trim();
+                    try { v = encodeURI(decodeURI(v)); } catch (err) { v = encodeURI(v); }
+                    return v.replace(/\\(/g, '%28').replace(/\\)/g, '%29');
+                }
+                function mdText(t) {
+                    return String(t).replace(/([\\\\`*_\\[\\]<>])/g, '\\\\$1');
+                }
                 function extractItem(item, idx) {
                     var titleEl = item.querySelector('.news-title a');
                     var titleText = '';
@@ -723,10 +767,11 @@ TAIL_SCRIPT_HTML = """
                     if (count) meta.push(count.textContent.trim());
 
                     var line = idx + '. ';
+                    url = mdUrl(url);
                     if (url) {
-                        line += '[' + titleText.replace(/[[\\]]/g, '') + '](' + url + ')';
+                        line += '[' + mdText(titleText) + '](' + url + ')';
                     } else {
-                        line += titleText;
+                        line += mdText(titleText);
                     }
                     if (meta.length) line += '  `' + meta.join(' | ') + '`';
                     return line;
@@ -801,8 +846,9 @@ TAIL_SCRIPT_HTML = """
                             var author = item.querySelector('.rss-author');
                             if (author) meta.push(author.textContent.trim());
                             var line = (i + 1) + '. ';
-                            if (url) { line += '[' + titleText.replace(/[\\[\\]]/g, '') + '](' + url + ')'; }
-                            else { line += titleText; }
+                            url = mdUrl(url);
+                            if (url) { line += '[' + mdText(titleText) + '](' + url + ')'; }
+                            else { line += mdText(titleText); }
                             if (meta.length) line += '  `' + meta.join(' | ') + '`';
                             lines.push(line);
                         });
@@ -929,9 +975,22 @@ TAIL_SCRIPT_HTML = """
 
                 // 键盘快捷键
                 document.addEventListener('keydown', function(e) {
-                    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+                    var tag = e.target.tagName;
+                    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target.isContentEditable) return;
+                    // 不拦截浏览器/系统快捷键（Ctrl+D 收藏、⌘+W 关闭等）
+                    if (e.ctrlKey || e.metaKey || e.altKey) return;
                     var helpBtn = document.querySelector('.fab-help');
                     switch(e.key) {
+                        case 'ArrowLeft': case 'ArrowRight':
+                            // 全局 ←/→ 切换热榜 Tab（仅当 Tab 栏可见且焦点不在 Tab 栏内，Tab 栏自身已处理）
+                            var tw = document.querySelector('.tab-bar-wrapper');
+                            if (!tw || tw.classList.contains('tab-hidden') || tw.contains(e.target)) break;
+                            var tbs = Array.prototype.slice.call(tw.querySelectorAll('.tab-btn'));
+                            if (!tbs.length) break;
+                            var cur = tbs.findIndex(function(t) { return t.classList.contains('active'); });
+                            var nxt = Math.max(0, Math.min(tbs.length - 1, cur + (e.key === 'ArrowRight' ? 1 : -1)));
+                            if (nxt !== cur) { tbs[nxt].click(); e.preventDefault(); }
+                            break;
                         case '?':
                             if (helpBtn) {
                                 helpBtn.classList.toggle('show-tip');

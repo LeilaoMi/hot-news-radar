@@ -5,14 +5,23 @@ HTML 报告渲染模块
 提供 HTML 格式的热点新闻报告生成功能
 """
 
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Callable
 
-from trendradar.report.helpers import html_escape, calculate_rank_trend
+from trendradar.report.helpers import html_escape, calculate_rank_trend, render_link
 from trendradar.utils.time import convert_time_for_display
 from trendradar.ai.formatter import render_ai_analysis_html_rich
 from trendradar.report.html_styles import BASE_HEAD_HTML
 from trendradar.report.html_script import TAIL_FOOTER_HTML, TAIL_SCRIPT_HTML
+
+
+_VERSION_RE = re.compile(r"^v?\d+(\.\d+){0,3}$")
+
+
+def _is_version_string(value) -> bool:
+    """版本号格式校验（如 6.0.1 / v6.0.1），防止远程内容注入 HTML。"""
+    return isinstance(value, str) and bool(_VERSION_RE.match(value.strip()))
 
 
 # 生成 RSS 统计内容
@@ -52,7 +61,7 @@ def render_rss_stats_html(stats: List[Dict], title: str = "RSS 订阅更新") ->
     rss_html = f"""
                 <div class="rss-section">
                     <div class="rss-section-header">
-                        <div class="rss-section-title">{title}</div>
+                        <div class="rss-section-title">{html_escape(title)}</div>
                         <div class="rss-section-count">{total_count} 条</div>
                     </div>
                     <div class="rss-feeds-grid">"""
@@ -98,11 +107,8 @@ def render_rss_stats_html(stats: List[Dict], title: str = "RSS 订阅更新") ->
                             <div class="rss-title">"""
 
             escaped_title = html_escape(item_title)
-            if url:
-                escaped_url = html_escape(url)
-                rss_html += f'<a href="{escaped_url}" target="_blank" class="rss-link">{escaped_title}</a>'
-            else:
-                rss_html += escaped_title
+            # 协议白名单：非 http(s) 链接只输出纯文本（防 javascript:/data: XSS）
+            rss_html += render_link(url, escaped_title, "rss-link")
 
             rss_html += """
                             </div>
@@ -118,7 +124,7 @@ def render_rss_stats_html(stats: List[Dict], title: str = "RSS 订阅更新") ->
 
 
 # 生成独立展示区内容
-def render_standalone_html(data: Optional[Dict]) -> str:
+def render_standalone_html(data: Optional[Dict], rank_threshold: int = 10) -> str:
     """渲染独立展示区 HTML（复用热点词汇统计区样式）
 
         Args:
@@ -198,6 +204,7 @@ def render_standalone_html(data: Optional[Dict]) -> str:
     # 生成 tab 栏（2+ 分组时）
     if len(all_groups) >= 2:
         standalone_html += """
+                    <div class="standalone-tab-wrapper" style="position: relative;">
                     <div class="tab-bar standalone-tab-bar">"""
         for idx, g in enumerate(all_groups):
             active = ' active' if idx == 0 else ''
@@ -205,6 +212,7 @@ def render_standalone_html(data: Optional[Dict]) -> str:
                         <button class="tab-btn{active}" data-standalone-tab="{idx}">{html_escape(g["name"])}<span class="tab-count">{g["count"]}</span></button>"""
         standalone_html += f"""
                         <button class="tab-btn" data-standalone-tab="all">全部<span class="tab-count">{total_count}</span></button>
+                    </div>
                     </div>"""
 
     standalone_html += """
@@ -249,7 +257,7 @@ def render_standalone_html(data: Optional[Dict]) -> str:
                 # 确定排名等级
                 if min_rank <= 3:
                     rank_class = "top"
-                elif min_rank <= 10:
+                elif min_rank <= rank_threshold:
                     rank_class = "high"
                 else:
                     rank_class = ""
@@ -263,7 +271,7 @@ def render_standalone_html(data: Optional[Dict]) -> str:
             elif rank > 0:
                 if rank <= 3:
                     rank_class = "top"
-                elif rank <= 10:
+                elif rank <= rank_threshold:
                     rank_class = "high"
                 else:
                     rank_class = ""
@@ -288,11 +296,7 @@ def render_standalone_html(data: Optional[Dict]) -> str:
 
             # 标题和链接（复用 news-link 样式）
             escaped_title = html_escape(title)
-            if url:
-                escaped_url = html_escape(url)
-                standalone_html += f'<a href="{escaped_url}" target="_blank" class="news-link">{escaped_title}</a>'
-            else:
-                standalone_html += escaped_title
+            standalone_html += render_link(url, escaped_title, "news-link")
 
             standalone_html += """
                                 </div>
@@ -352,11 +356,7 @@ def render_standalone_html(data: Optional[Dict]) -> str:
                                 <div class="news-title">"""
 
             escaped_title = html_escape(title)
-            if url:
-                escaped_url = html_escape(url)
-                standalone_html += f'<a href="{escaped_url}" target="_blank" class="news-link">{escaped_title}</a>'
-            else:
-                standalone_html += escaped_title
+            standalone_html += render_link(url, escaped_title, "news-link")
 
             standalone_html += """
                                 </div>
@@ -642,11 +642,7 @@ def _render_hotlist_section(report_data: Dict, display_mode: str) -> str:
                 escaped_title = html_escape(title_data["title"])
                 link_url = title_data.get("mobile_url") or title_data.get("url", "")
 
-                if link_url:
-                    escaped_url = html_escape(link_url)
-                    stats_html += f'<a href="{escaped_url}" target="_blank" class="news-link">{escaped_title}</a>'
-                else:
-                    stats_html += escaped_title
+                stats_html += render_link(link_url, escaped_title, "news-link")
 
                 stats_html += """
                             </div>
@@ -713,11 +709,7 @@ def _render_new_items_section(report_data: Dict, show_new_section: bool) -> str:
                 escaped_title = html_escape(title_data["title"])
                 link_url = title_data.get("mobile_url") or title_data.get("url", "")
 
-                if link_url:
-                    escaped_url = html_escape(link_url)
-                    new_titles_html += f'<a href="{escaped_url}" target="_blank" class="news-link">{escaped_title}</a>'
-                else:
-                    new_titles_html += escaped_title
+                new_titles_html += render_link(link_url, escaped_title, "news-link")
 
                 new_titles_html += """
                                 </div>
@@ -747,6 +739,7 @@ def render_html_content(
     standalone_data: Optional[Dict] = None,
     ai_analysis: Optional[Any] = None,
     show_new_section: bool = True,
+    rank_threshold: int = 10,
 ) -> str:
     """渲染HTML内容
 
@@ -805,7 +798,7 @@ def render_html_content(
     rss_new_html = render_rss_stats_html(rss_new_items, "RSS 新增更新") if rss_new_items else ""
 
     # 生成独立展示区 HTML
-    standalone_html = render_standalone_html(standalone_data)
+    standalone_html = render_standalone_html(standalone_data, rank_threshold=rank_threshold)
 
     # 生成 AI 分析 HTML
     ai_html = render_ai_analysis_html_rich(ai_analysis) if ai_analysis else ""
@@ -845,11 +838,13 @@ def render_html_content(
 
     html += TAIL_FOOTER_HTML
 
-    if update_info:
+    if update_info and _is_version_string(update_info.get("remote_version")) \
+            and _is_version_string(update_info.get("current_version")):
+        # 版本号来自远程（GitHub raw / CDN），只接受纯数字版本号并转义后输出
         html += f"""
                     <br>
                     <span style="color: #ea580c; font-weight: 500;">
-                        发现新版本 {update_info['remote_version']}，当前版本 {update_info['current_version']}
+                        发现新版本 {html_escape(update_info['remote_version'])}，当前版本 {html_escape(update_info['current_version'])}
                     </span>"""
 
     html += TAIL_SCRIPT_HTML

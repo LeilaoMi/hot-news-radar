@@ -84,6 +84,32 @@ class RSSFetcher:
 
         return session
 
+    def _get_with_retry(self, url: str, retries: int = None):
+        """GET 请求，超时 / 连接错误 / 5xx 时重试（默认 1 次，与热榜的重试策略保持一致的思路）。"""
+        import time as _time
+
+        if retries is None:
+            retries = getattr(self, "max_retries", 1)
+        last_exc = None
+        for attempt in range(retries + 1):
+            try:
+                response = self.session.get(url, timeout=self.timeout)
+                if response.status_code >= 500 and attempt < retries:
+                    last_exc = requests.HTTPError(f"{response.status_code} Server Error", response=response)
+                    _time.sleep(1 + attempt)
+                    continue
+                response.raise_for_status()
+                return response
+            except (requests.Timeout, requests.ConnectionError) as e:
+                last_exc = e
+                if attempt < retries:
+                    _time.sleep(1 + attempt)
+                    continue
+                raise
+        if last_exc:
+            raise last_exc
+        raise requests.RequestException("unreachable")
+
     def fetch_feed(self, feed: RSSFeedConfig) -> Tuple[List[RSSItem], Optional[str]]:
         """
         抓取单个 RSS 源
@@ -95,10 +121,10 @@ class RSSFetcher:
             (条目列表, 错误信息) 元组
         """
         try:
-            response = self.session.get(feed.url, timeout=self.timeout)
-            response.raise_for_status()
+            response = self._get_with_retry(feed.url)
 
-            parsed_items = self.parser.parse(response.text, feed.url)
+            # 传 bytes 给解析器：让 feedparser 按 XML 声明解码，而不是用 requests 猜测的编码
+            parsed_items = self.parser.parse(response.content, feed.url)
 
             # 限制条目数量（0=不限制）
             if feed.max_items > 0:

@@ -59,6 +59,57 @@ def html_escape(text: str) -> str:
     )
 
 
+# 报告页的 Content-Security-Policy（<meta http-equiv>）。
+# 页面实际需要：内联 <script>/<style> 与 onclick/oninput 等内联事件（'unsafe-inline'）、
+# cdnjs 上的 html2canvas（截图功能）、站点自身注入的导航/搜索脚本与 sw.js（'self'）、
+# html2canvas 生成的 data:/blob: 图片。其余一律禁止：插件、<base> 劫持、表单外发、
+# 外部脚本、外链 iframe。注意 CSP 不能阻止用户点击 javascript: 链接，
+# 协议白名单（safe_href）才是根本防线，CSP 是纵深防御。
+REPORT_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: blob: https:; "
+    "font-src 'self' data:; "
+    "connect-src 'self'; "
+    "frame-src 'none'; "
+    "object-src 'none'; "
+    "base-uri 'none'; "
+    "form-action 'none'"
+)
+REPORT_CSP_META = f'<meta http-equiv="Content-Security-Policy" content="{REPORT_CSP}">'
+
+# target="_blank" 链接统一附带的 rel，防止新窗口通过 window.opener 反向操纵报告页
+EXTERNAL_LINK_REL = "noopener noreferrer"
+
+
+def safe_href(url) -> str:
+    """返回可直接写入 href 属性的安全链接（协议白名单 + HTML 转义）。
+
+    非 http/https 链接（javascript:、data:、vbscript:、实体/空白混淆等）返回空串，
+    调用方应在空串时只输出纯文本标题。
+    """
+    from trendradar.utils.url import sanitize_url
+
+    cleaned = sanitize_url(url)
+    return html_escape(cleaned) if cleaned else ""
+
+
+def render_link(url, text_html: str, css_class: str = "") -> str:
+    """渲染外部链接：链接不安全时退化为纯文本。
+
+    Args:
+        url: 原始链接
+        text_html: **已转义**的链接文本
+        css_class: 可选 class
+    """
+    href = safe_href(url)
+    if not href:
+        return text_html
+    cls = f' class="{css_class}"' if css_class else ""
+    return f'<a href="{href}" target="_blank" rel="{EXTERNAL_LINK_REL}"{cls}>{text_html}</a>'
+
+
 def calculate_rank_trend(rank_timeline=None, ranks=None):
     """根据排名时间线或排名列表计算趋势方向
 

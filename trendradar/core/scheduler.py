@@ -11,7 +11,13 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
-from datetime import datetime
+from datetime import datetime, timedelta
+
+VALID_REPORT_MODES = ("daily", "current", "incremental")
+VALID_AI_MODES = ("follow_report",) + VALID_REPORT_MODES
+
+# 默认配置（未命中任何时间段）的 once 记录使用的键
+DEFAULT_ONCE_KEY = "__default__"
 
 
 @dataclass
@@ -30,6 +36,17 @@ class ResolvedSchedule:
     frequency_file: Optional[str] = None  # 频率词文件路径，None=使用默认
     filter_method: Optional[str] = None   # 筛选策略: "keyword"|"ai"，None=使用全局配置
     interests_file: Optional[str] = None  # AI 筛选兴趣文件，None=使用默认
+    ai_mode_explicit: bool = False        # timeline 是否显式指定了 ai_mode（非 follow_report）
+
+    @property
+    def once_key(self) -> Optional[str]:
+        """once 去重使用的键：命中时间段用 period_key，默认配置用 DEFAULT_ONCE_KEY。
+
+        之前默认配置（period_key=None）的 once 永远不生效，与 timeline 注释不符。
+        """
+        if self.day_plan == "disabled":
+            return None
+        return self.period_key or DEFAULT_ONCE_KEY
 
 
 class Scheduler:
@@ -66,13 +83,19 @@ class Scheduler:
         self.schedule_config = schedule_config
         self.storage = storage_backend
         self.get_time = get_time_func
-        self.enabled = schedule_config.get("enabled", True)
+        # 与 loader 的默认值保持一致（schedule.enabled 缺省为 False）
+        self.enabled = schedule_config.get("enabled", False)
         self.fallback_report_mode = fallback_report_mode
 
-        # 加载并构建最终 timeline
-        self.timeline = self._build_timeline(schedule_config, timeline_data)
+        # 加载并构建最终 timeline（调度关闭时不要求 preset 合法，例如 CI 的 SCHEDULE_ENABLED=false）
         if self.enabled:
+            self.timeline = self._build_timeline(schedule_config, timeline_data)
             self._validate_timeline(self.timeline)
+        else:
+            try:
+                self.timeline = self._build_timeline(schedule_config, timeline_data)
+            except ValueError:
+                self.timeline = {"periods": {}}
 
     def _build_timeline(
         self,
@@ -96,6 +119,17 @@ class Scheduler:
         # 确保 periods 是 dict（可能为空 {}）
         if timeline.get("periods") is None:
             timeline["periods"] = {}
+
+        # week_map 键统一规范为 int（YAML 里写成 "1" 也能用）
+        week_map = timeline.get("week_map")
+        if isinstance(week_map, dict):
+            normalized = {}
+            for k, v in week_map.items():
+                try:
+                    normalized[int(k)] = v
+                except (TypeError, ValueError):
+                    raise ValueError(f"week_map 的键必须是 1-7 的整数，实际为: {k!r}")
+            timeline["week_map"] = normalized
 
         return timeline
 
@@ -153,6 +187,7 @@ class Scheduler:
         print(f"[调度] 星期{weekday_names.get(weekday, '?')}，日计划: {day_plan_key}")
         print(f"[调度] 当前时间段: {period_display}")
 
+        raw_ai_mode = merged.get("ai_mode", "follow_report")
         resolved = ResolvedSchedule(
             period_key=period_key,
             period_name=(
@@ -171,6 +206,7 @@ class Scheduler:
             frequency_file=merged.get("frequency_file"),
             filter_method=merged.get("filter_method"),
             interests_file=merged.get("interests_file"),
+            ai_mode_explicit=bool(raw_ai_mode) and raw_ai_mode != "follow_report",
         )
 
         # 打印行为摘要
@@ -281,6 +317,27 @@ class Scheduler:
             return cfg.get("report_mode", "current")
         return ai_mode
 
+    def window_date(self, period_key: Optional[str], date_str: str) -> str:
+        """once 记录使用的日期：跨日时间段（如 22:00-01:00）的凌晨部分归属窗口起始日。
+
+        否则 22:30 推送一次后，00:30 日期变化会再推一次。仅当 date_str 是「今天」时才调整，
+        显式查询其它日期（如 status 命令）保持原样。
+        """
+        if not period_key or period_key == DEFAULT_ONCE_KEY:
+            return date_str
+        period = self.timeline.get("periods", {}).get(period_key)
+        if not period:
+            return date_str
+        start, end = str(period.get("start", "")), str(period.get("end", ""))
+        if not start or not end or start <= end:
+            return date_str
+        now = self.get_time()
+        if now.strftime("%Y-%m-%d") != date_str:
+            return date_str
+        if now.strftime("%H:%M") < end:
+            return (now - timedelta(days=1)).strftime("%Y-%m-%d")
+        return date_str
+
     def already_executed(self, period_key: str, action: str, date_str: str) -> bool:
         """
         检查指定时间段的某个 action 今天是否已执行
@@ -293,6 +350,7 @@ class Scheduler:
         Returns:
             是否已执行
         """
+        date_str = self.window_date(period_key, date_str)
         return self.storage.has_period_executed(date_str, period_key, action)
 
     def record_execution(self, period_key: str, action: str, date_str: str) -> None:
@@ -304,7 +362,16 @@ class Scheduler:
             action: 动作类型 (analyze / push)
             date_str: 日期 YYYY-MM-DD
         """
+        date_str = self.window_date(period_key, date_str)
         self.storage.record_period_execution(date_str, period_key, action)
+
+    def clear_execution(self, period_key: str, action: str, date_str: str) -> bool:
+        """撤销一条 once 记录（例如推送全部失败时撤销本轮 analyze 记账，让下一轮重新分析）。"""
+        date_str = self.window_date(period_key, date_str)
+        clear = getattr(self.storage, "delete_period_execution", None)
+        if clear is None:
+            return False
+        return bool(clear(date_str, period_key, action))
 
     # ========================================
     # 校验
@@ -341,6 +408,26 @@ class Scheduler:
                     raise ValueError(
                         f"day_plan[{plan_key}] 引用了不存在的 period: {period_key}"
                     )
+
+        # report_mode / ai_mode 取值校验（写成 "Daily" / "curent" 时尽早报错，
+        # 避免报告头显示「全天汇总」而数据却按增量处理）
+        def _check_modes(cfg: Dict[str, Any], where: str) -> None:
+            if not isinstance(cfg, dict):
+                return
+            rm = cfg.get("report_mode")
+            if rm is not None and rm not in VALID_REPORT_MODES:
+                raise ValueError(
+                    f"{where}.report_mode 取值非法: {rm!r}，可选: {', '.join(VALID_REPORT_MODES)}"
+                )
+            am = cfg.get("ai_mode")
+            if am is not None and am not in VALID_AI_MODES:
+                raise ValueError(
+                    f"{where}.ai_mode 取值非法: {am!r}，可选: {', '.join(VALID_AI_MODES)}"
+                )
+
+        _check_modes(timeline.get("default", {}), "default")
+        for period_key, period in timeline["periods"].items():
+            _check_modes(period, f"periods.{period_key}")
 
         # 时间格式校验
         for period_key, period in timeline["periods"].items():
@@ -424,6 +511,15 @@ class Scheduler:
     @staticmethod
     def _validate_hhmm(value: str, field_name: str) -> None:
         """校验 HH:MM 格式"""
+        if isinstance(value, int) and not isinstance(value, bool):
+            # PyYAML 把未加引号的 20:30 解析成六十进制整数 1230
+            h, m = divmod(value, 60)
+            raise ValueError(
+                f"{field_name} 被 YAML 解析成了数字 {value}（大概是 {h:02d}:{m:02d}），"
+                f"请给时间加引号，例如 \"{h:02d}:{m:02d}\""
+            )
+        if not isinstance(value, str):
+            raise ValueError(f"{field_name} 格式错误: {value!r}，期望字符串 \"HH:MM\"")
         if not re.match(r"^\d{2}:\d{2}$", value):
             raise ValueError(f"{field_name} 格式错误: '{value}'，期望 HH:MM")
         h, m = value.split(":")

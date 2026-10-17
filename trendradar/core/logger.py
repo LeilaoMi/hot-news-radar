@@ -19,13 +19,15 @@
 - 全局仅挂载一次 handler，重复调用 get_logger 幂等。
 """
 import logging
-import os
+
 import sys
+
+from trendradar.utils.env import env_bool as _env_bool
 
 _CONFIGURED = False
 
 # 模块级缓存 DEBUG 开关判定，避免热路径反复读环境变量
-_DEBUG_ENABLED: bool = os.environ.get("DEBUG", "").strip().lower() in ("1", "true", "yes")
+_DEBUG_ENABLED: bool = bool(_env_bool("DEBUG", False))
 
 
 class _TrendRadarFormatter(logging.Formatter):

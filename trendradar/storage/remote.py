@@ -123,6 +123,12 @@ class RemoteStorageBackend(SQLiteStorageMixin, StorageBackend):
         self._batch_mode = False
         self._batch_dirty: set = set()  # 待上传的 (date, db_type) 集合
 
+        # 条件写（防 last-writer-wins）：记录下载时远端对象的 ETag，上传时用 IfMatch；
+        # 下载时远端不存在则记为 None，上传时用 IfNoneMatch="*"。
+        # 键不在字典里（例如本地文件来自 pull）时退化为无条件写（旧行为）。
+        self._remote_etags: Dict[str, Optional[str]] = {}
+        self._conditional_writes = True
+
         print(f"[远程存储] 初始化完成，存储桶: {bucket_name}，签名版本: {signature_version}")
 
     @property
@@ -227,6 +233,7 @@ class RemoteStorageBackend(SQLiteStorageMixin, StorageBackend):
         # 先检查文件是否存在
         if not self._check_object_exists(r2_key):
             print(f"[远程存储] 文件不存在，将创建新数据库: {r2_key}")
+            self._remote_etags[r2_key] = None
             return None
 
         try:
@@ -236,6 +243,7 @@ class RemoteStorageBackend(SQLiteStorageMixin, StorageBackend):
             with open(local_path, 'wb') as f:
                 for chunk in response['Body'].iter_chunks(chunk_size=1024*1024):
                     f.write(chunk)
+            self._remote_etags[r2_key] = response.get('ETag')
             self._downloaded_files.append(local_path)
             print(f"[远程存储] 已下载: {r2_key} -> {local_path}")
             return local_path
@@ -299,13 +307,38 @@ class RemoteStorageBackend(SQLiteStorageMixin, StorageBackend):
                 file_content = f.read()
 
             # 使用 put_object 并明确设置 ContentLength，确保不使用 chunked encoding
-            self.s3_client.put_object(
+            put_kwargs = dict(
                 Bucket=self.bucket_name,
                 Key=r2_key,
                 Body=file_content,
                 ContentLength=local_size,
                 ContentType='application/x-sqlite3',
             )
+            cond_kwargs = {}
+            if self._conditional_writes and r2_key in self._remote_etags:
+                etag = self._remote_etags[r2_key]
+                cond_kwargs = {"IfMatch": etag} if etag else {"IfNoneMatch": "*"}
+            try:
+                response = self.s3_client.put_object(**put_kwargs, **cond_kwargs)
+            except ClientError as e:
+                code = str(e.response.get("Error", {}).get("Code", ""))
+                status = e.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+                if cond_kwargs and (code in ("PreconditionFailed", "ConditionalRequestConflict") or status in (409, 412)):
+                    # 远端在本次运行期间被其它运行改写：拒绝覆盖，避免丢失对方写入的
+                    # crawl_records / period_executions（last-writer-wins）
+                    print(
+                        f"::error::[远程存储] 并发写冲突，远端 {r2_key} 已被其它运行修改，"
+                        "本次不覆盖（请检查是否有重叠运行）"
+                    )
+                    return False
+                if cond_kwargs and (code in ("NotImplemented", "InvalidArgument", "InvalidRequest") or status == 501):
+                    print(f"[远程存储] 服务端不支持条件写（{code or status}），退化为无条件上传")
+                    self._conditional_writes = False
+                    response = self.s3_client.put_object(**put_kwargs)
+                else:
+                    raise
+            if isinstance(response, dict) and response.get("ETag"):
+                self._remote_etags[r2_key] = response.get("ETag")
             print(f"[远程存储] 已上传: {local_path} -> {r2_key}")
 
             # 验证上传成功
@@ -440,6 +473,12 @@ class RemoteStorageBackend(SQLiteStorageMixin, StorageBackend):
                 return False
 
         return False
+
+    def delete_period_execution(self, date_str: str, period_key: str, action: str) -> bool:
+        """撤销时间段的 action 执行记录并同步到远程"""
+        if not self._delete_period_execution_impl(date_str, period_key, action):
+            return False
+        return self._upload_sqlite(date_str)
 
     # ========================================
     # RSS 数据存储方法

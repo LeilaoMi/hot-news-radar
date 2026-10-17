@@ -100,10 +100,30 @@ class StorageManager:
                     return "remote"
                 else:
                     print("[存储管理器] GitHub Actions 环境但未配置远程存储，使用本地存储")
+                    self._warn_if_no_persisted_state()
                     return "local"
             else:
                 return "local"
         return self.backend_type
+
+    def _warn_if_no_persisted_state(self) -> None:
+        """CI + 本地后端时，若 output/news 下没有任何历史数据库则醒目告警。
+
+        这种情况下 once 防重推、当日累计（daily）、新增检测、排名时间线全部失效
+        （每次运行都是空库）。需要在 workflow 中用 actions/cache 恢复 output/，或配置 S3/R2。
+        """
+        from pathlib import Path
+
+        news_dir = Path(self.data_dir) / "news"
+        has_db = news_dir.is_dir() and any(news_dir.glob("*.db"))
+        if not has_db:
+            print(
+                "::warning::[存储管理器] GitHub Actions + 本地存储，且未发现已持久化的数据库"
+                f"（{news_dir}/*.db）。once 防重推 / 全天汇总 / 新增检测将只基于本次运行；"
+                "请用 actions/cache 恢复 output/ 或配置 S3/R2 远程存储。"
+            )
+        else:
+            print(f"[存储管理器] 已发现持久化数据库目录: {news_dir}")
 
     def _has_remote_config(self) -> bool:
         """检查是否有有效的远程存储配置"""
@@ -157,8 +177,11 @@ class StorageManager:
                 if self._backend:
                     print("[存储管理器] 使用远程存储后端")
                 else:
-                    print("[存储管理器] 回退到本地存储")
+                    # 远程配置齐全却初始化失败：不能静默降级（会导致跨运行状态丢失）
+                    print("::warning::[存储管理器] 远程存储初始化失败，回退到本地存储（跨运行状态可能丢失）")
                     resolved_type = "local"
+                    if self.is_github_actions():
+                        self._warn_if_no_persisted_state()
 
             if resolved_type == "local" or self._backend is None:
                 from trendradar.storage.local import LocalStorageBackend
@@ -288,6 +311,10 @@ class StorageManager:
     def record_period_execution(self, date_str: str, period_key: str, action: str) -> bool:
         """记录时间段的 action 执行"""
         return self.get_backend().record_period_execution(date_str, period_key, action)
+
+    def delete_period_execution(self, date_str: str, period_key: str, action: str) -> bool:
+        """撤销时间段的 action 执行记录"""
+        return self.get_backend().delete_period_execution(date_str, period_key, action)
 
     # === AI 智能筛选存储操作 ===
 

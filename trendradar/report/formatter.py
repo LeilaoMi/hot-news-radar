@@ -7,7 +7,22 @@
 
 from typing import Dict
 
-from trendradar.report.helpers import clean_title, html_escape, format_rank_display
+import re
+
+from trendradar.report.helpers import clean_title, html_escape, format_rank_display, render_link
+from trendradar.utils.url import sanitize_url
+
+_FEISHU_AT_RE = re.compile(r"<\s*(/?\s*at)\b", re.IGNORECASE)
+
+
+def _feishu_text(text) -> str:
+    """飞书卡片 markdown：中和 <at id=all></at> 之类的群体 @ 注入。"""
+    return _FEISHU_AT_RE.sub(r"&lt;\1", str(text or ""))
+
+
+def _slack_text(text) -> str:
+    """Slack mrkdwn 官方要求转义 & < >，同时中和 <!channel>/<!here>/<@U..> 注入。"""
+    return str(text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def format_title_for_platform(
@@ -49,26 +64,28 @@ def format_title_for_platform(
         rank_timeline=title_data.get("rank_timeline"),
     )
 
-    link_url = title_data["mobile_url"] or title_data["url"]
+    # 协议白名单：外部数据中的 javascript:/data: 等链接一律丢弃（所有渠道共用）
+    link_url = sanitize_url(title_data.get("mobile_url") or "") or sanitize_url(title_data.get("url") or "")
     cleaned_title = clean_title(title_data["title"])
     if not cleaned_title:
-        cleaned_title = link_url or title_data["url"] or ""
+        cleaned_title = link_url or ""
 
     # 获取关键词标签（platform 模式使用）
     keyword = title_data.get("matched_keyword", "") if show_keyword else ""
 
     if platform == "feishu":
+        safe_title = _feishu_text(cleaned_title)
         if link_url:
-            formatted_title = f"[{cleaned_title}]({link_url})"
+            formatted_title = f"[{safe_title}]({link_url})"
         else:
-            formatted_title = cleaned_title
+            formatted_title = safe_title
 
         title_prefix = "🆕 " if title_data.get("is_new") else ""
 
         if show_source:
-            result = f"<font color='grey'>&#91;{title_data['source_name']}&#93;</font> {title_prefix}{formatted_title}"
+            result = f"<font color='grey'>&#91;{_feishu_text(title_data['source_name'])}&#93;</font> {title_prefix}{formatted_title}"
         elif show_keyword and keyword:
-            result = f"<font color='blue'>&#91;{keyword}&#93;</font> {title_prefix}{formatted_title}"
+            result = f"<font color='blue'>&#91;{_feishu_text(keyword)}&#93;</font> {title_prefix}{formatted_title}"
         else:
             result = f"{title_prefix}{formatted_title}"
 
@@ -131,15 +148,16 @@ def format_title_for_platform(
         return result
 
     elif platform == "telegram":
+        # Telegram parse_mode=HTML：所有文本与 href 都必须转义，否则一个 < 就会让整批 400
         if link_url:
-            formatted_title = f'<a href="{link_url}">{html_escape(cleaned_title)}</a>'
+            formatted_title = f'<a href="{html_escape(link_url)}">{html_escape(cleaned_title)}</a>'
         else:
-            formatted_title = cleaned_title
+            formatted_title = html_escape(cleaned_title)
 
         title_prefix = "🆕 " if title_data.get("is_new") else ""
 
         if show_source:
-            result = f"[{title_data['source_name']}] {title_prefix}{formatted_title}"
+            result = f"[{html_escape(title_data['source_name'])}] {title_prefix}{formatted_title}"
         elif show_keyword and keyword:
             result = f"<b>[{html_escape(keyword)}]</b> {title_prefix}{formatted_title}"
         else:
@@ -148,7 +166,7 @@ def format_title_for_platform(
         if rank_display:
             result += f" {rank_display}"
         if title_data["time_display"]:
-            result += f" <code>- {title_data['time_display']}</code>"
+            result += f" <code>- {html_escape(title_data['time_display'])}</code>"
         if title_data["count"] > 1:
             result += f" <code>({title_data['count']}次)</code>"
 
@@ -180,18 +198,20 @@ def format_title_for_platform(
 
     elif platform == "slack":
         # Slack 使用 mrkdwn 格式
+        safe_title = _slack_text(cleaned_title)
         if link_url:
-            # Slack 链接格式: <url|text>
-            formatted_title = f"<{link_url}|{cleaned_title}>"
+            # Slack 链接格式: <url|text>（url 中的 | > 需编码，否则会截断链接）
+            slack_url = link_url.replace("|", "%7C").replace(">", "%3E").replace("<", "%3C")
+            formatted_title = f"<{slack_url}|{safe_title}>"
         else:
-            formatted_title = cleaned_title
+            formatted_title = safe_title
 
         title_prefix = "🆕 " if title_data.get("is_new") else ""
 
         if show_source:
-            result = f"[{title_data['source_name']}] {title_prefix}{formatted_title}"
+            result = f"[{_slack_text(title_data['source_name'])}] {title_prefix}{formatted_title}"
         elif show_keyword and keyword:
-            result = f"*[{keyword}]* {title_prefix}{formatted_title}"
+            result = f"*[{_slack_text(keyword)}]* {title_prefix}{formatted_title}"
         else:
             result = f"{title_prefix}{formatted_title}"
 
@@ -215,8 +235,6 @@ def format_title_for_platform(
             rank_timeline=title_data.get("rank_timeline"),
         )
 
-        link_url = title_data["mobile_url"] or title_data["url"]
-
         escaped_title = html_escape(cleaned_title)
         escaped_source_name = html_escape(title_data["source_name"])
 
@@ -230,8 +248,7 @@ def format_title_for_platform(
             prefix = ""
 
         if link_url:
-            escaped_url = html_escape(link_url)
-            formatted_title = f'{prefix}<a href="{escaped_url}" target="_blank" class="news-link">{escaped_title}</a>'
+            formatted_title = f'{prefix}{render_link(link_url, escaped_title, "news-link")}'
         else:
             formatted_title = f'{prefix}<span class="no-link">{escaped_title}</span>'
 

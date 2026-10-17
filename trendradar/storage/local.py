@@ -195,6 +195,10 @@ class LocalStorageBackend(SQLiteStorageMixin, StorageBackend):
             print(f"[本地存储] 时间段执行记录已保存: {period_key}/{action} at {now_str}")
         return success
 
+    def delete_period_execution(self, date_str: str, period_key: str, action: str) -> bool:
+        """撤销时间段的 action 执行记录"""
+        return self._delete_period_execution_impl(date_str, period_key, action)
+
     # ========================================
     # RSS 数据存储方法
     # ========================================
