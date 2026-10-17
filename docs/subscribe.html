@@ -126,7 +126,7 @@ opacity:0;pointer-events:none;transition:all .25s;z-index:99}
         <ol>
           <li>点击「复制片段」；</li>
           <li>打开你的部署仓库（或本地项目）中的 <code>config/frequency_words.txt</code>；</li>
-          <li>把片段粘贴到 <code>[WORD_GROUPS]</code> 区域（全局排除词粘贴到 <code>[GLOBAL_FILTER]</code> 区域），保存即可。</li>
+          <li>直接用生成的内容替换 <code>config/frequency_words.txt</code>（片段已自带 <code>[GLOBAL_FILTER]</code> / <code>[WORD_GROUPS]</code> 区域标记；勾选的话题只会进词组区，排除词只进全局过滤区），保存即可。</li>
         </ol>
         <p style="margin-top:6px">说明：词组区保持为空 = 全量模式（显示全部热点）。更多玩法（正则、别名）请用
           <a href="./editor.html" style="color:#0969da">完整配置编辑器</a>。</p>
@@ -162,8 +162,13 @@ var state = {topics:{}, customName:"", customWords:"", globalFilter:""};
 function init(){
   try{
     var saved = JSON.parse(localStorage.getItem(LS_KEY) || "null");
-    if(saved) state = saved;
+    if(saved && typeof saved === "object") state = saved;
   }catch(e){}
+  // localStorage 里的旧草稿可能缺字段或被改坏，逐项兜底
+  if(!state.topics || typeof state.topics !== "object") state.topics = {};
+  state.customName = String(state.customName || "");
+  state.customWords = String(state.customWords || "");
+  state.globalFilter = String(state.globalFilter || "");
   var grid = document.getElementById("topics");
   var html = "";
   for(var i=0;i<TOPICS.length;i++){
@@ -204,7 +209,8 @@ function generate(){
   // 头注释（解析器忽略 # 行，安全）
   out.push("# Hot News Radar · 关键词订阅片段");
   out.push("# 由「关键词订阅生成器」生成 · " + new Date().toISOString().slice(0,10));
-  out.push("# 粘贴方法：词组贴到 [WORD_GROUPS] 区域，全局排除词贴到 [GLOBAL_FILTER] 区域");
+  out.push("# 用法：整份内容可直接作为 config/frequency_words.txt 使用（替换原文件）");
+  out.push("# 结构：[GLOBAL_FILTER] 区只放「命中即丢弃」的排除词；话题词组全部在 [WORD_GROUPS] 区");
   out.push("# 语法：每行一个词；+必须词  !过滤词  @上限  /正则/ => 别名；词组之间用空行分隔");
   out.push("");
 
@@ -214,6 +220,17 @@ function generate(){
   if(gf.length){
     out.push("[GLOBAL_FILTER]");
     for(var i=0;i<gf.length;i++){ out.push(gf[i]); wordCount++; }
+    out.push("");
+  }
+
+  // 词组区标记：解析器（trendradar/core/frequency.py）一旦进入 [GLOBAL_FILTER]
+  // 就会一直停留在该区域，必须显式切回 [WORD_GROUPS]，否则下面的话题会全部
+  // 变成「全局过滤词」—— 与用户意图完全相反。
+  var lines = (state.customWords||"").split("\n").map(function(s){return s.trim();})
+    .filter(function(s){return s && s.indexOf("#")!==0;});
+  var hasTopics = TOPICS.some(function(tp){ return !!state.topics[tp.id]; });
+  if(hasTopics || lines.length){
+    out.push("[WORD_GROUPS]");
     out.push("");
   }
 
@@ -228,10 +245,10 @@ function generate(){
   }
 
   // 自定义组
-  var lines = (state.customWords||"").split("\n").map(function(s){return s.trim();})
-    .filter(function(s){return s && s.indexOf("#")!==0;});
   if(lines.length){
-    var name = (state.customName||"").trim();
+    var name = (state.customName||"").trim().replace(/[\[\]]/g, "");
+    // 区域名不能当组名，否则会被解析器当成区域切换标记
+    if(/^(GLOBAL_FILTER|WORD_GROUPS)$/i.test(name)) name = "";
     if(name) out.push("[" + name + "]");
     for(var l=0;l<lines.length;l++){ out.push(lines[l]); wordCount++; }
     out.push("");
