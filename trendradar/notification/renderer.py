@@ -3,12 +3,18 @@
 通知内容渲染模块
 
 提供多平台通知内容渲染功能，生成格式化的推送消息
+
+⚠️ 已废弃：推送主流程使用 splitter.split_content_into_batches，本模块的
+render_feishu_content / render_dingtalk_content 目前没有调用方（AppContext.render_feishu /
+render_dingtalk 也无人调用），且 RSS 区块读取的是旧的扁平结构（feed_id/feed_name），
+与当前 rss_items（[{word, count, titles}]）不兼容。保留仅为兼容 trendradar.context 的导入；
+标题格式化已切到带转义的推送版 format_title_for_platform。
 """
 
 from datetime import datetime
 from typing import Dict, List, Optional, Callable
 
-from trendradar.report.formatter import format_title_for_platform
+from trendradar.notification.formatters import format_title_for_platform
 
 
 # 默认区域顺序
