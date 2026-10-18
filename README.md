@@ -4,12 +4,13 @@
 
 **全量新闻雷达 —— 不限平台 · 不限关键词 · 不限类目**
 
-每小时聚合 11 个国内热榜 + 8 个国际 RSS 源，AI 自动翻译、语义去重与分析，
-生成在线快照/日报/趋势页，双时段推送到你的微信 / 飞书 / Telegram / 邮箱 / Bark。
+11 个国内热榜 + 8 个国际 RSS，AI 翻译 / 语义去重 / 趋势分析 / 日报，
+全天静默采集，生成在线快照、当日汇总、AI 日报、趋势页与 Feed。
 
-[![⏰ 每小时自动运行](https://img.shields.io/badge/⏰_每小时自动运行-GitHub_Actions-2088FF?logo=githubactions)](https://github.com/LeilaoMi/hot-news-radar/actions)
-[![📊 历史归档](https://img.shields.io/badge/📊_历史归档-在线浏览-4285F4)](https://leilaomi.github.io/hot-news-radar/reports/archive.html)
-[![🤖 AI](https://img.shields.io/badge/🤖_AI-智谱GLM--4--Flash_免费-6E29F7)](https://open.bigmodel.cn)
+[![Get Hot News](https://github.com/LeilaoMi/hot-news-radar/actions/workflows/crawler.yml/badge.svg)](https://github.com/LeilaoMi/hot-news-radar/actions/workflows/crawler.yml)
+[![Tests](https://github.com/LeilaoMi/hot-news-radar/actions/workflows/test.yml/badge.svg)](https://github.com/LeilaoMi/hot-news-radar/actions/workflows/test.yml)
+[![🌐 在线站点](https://img.shields.io/badge/🌐_在线站点-news.leilaomi.abrdns.com-4285F4)](https://news.leilaomi.abrdns.com/)
+[![🤖 AI](https://img.shields.io/badge/🤖_AI-GLM--4--Flash_免费-6E29F7)](https://open.bigmodel.cn)
 [![⚖️ License](https://img.shields.io/badge/⚖️_License-GPL--3.0-blue)](LICENSE)
 
 </div>
@@ -20,18 +21,21 @@
 
 - [项目简介](#项目简介)
 - [站点导航](#站点导航)
+- [当前运行状态](#当前运行状态)
 - [功能总览](#功能总览)
-- [环境要求](#环境要求)
-- [数据源清单](#数据源清单)
+- [数据源](#数据源)
 - [运行机制](#运行机制)
-- [每日时间线](#每日时间线)
-- [AI 能力说明](#ai-能力说明)
-- [历史归档](#历史归档)
-- [分支架构](#分支架构)
+- [调度与时段](#调度与时段)
+- [AI 能力](#ai-能力)
+- [状态持久化](#状态持久化)
+- [分支与发布](#分支与发布)
 - [部署指南](#部署指南)
 - [本地运行](#本地运行)
+- [Docker 与 MCP](#docker-与-mcp)
 - [配置详解](#配置详解)
+- [安全设计](#安全设计)
 - [目录结构](#目录结构)
+- [已知限制](#已知限制)
 - [常见问题](#常见问题)
 - [致谢与许可](#致谢与许可)
 
@@ -39,282 +43,319 @@
 
 ## 项目简介
 
-这是一个**零成本运行在 GitHub Actions 上的个人新闻雷达**：
+一个**零服务器成本、跑在 GitHub Actions 上的个人新闻雷达**，基于
+[TrendRadar](https://github.com/sansan0/TrendRadar) v6.10.0 深度改版。
 
-- **采集端**：每小时整点 :33 抓取国内 11 大平台热榜（头条、微博、B站、抖音、知乎等），
-  以及 BBC、纽约时报、卫报、半岛电视台、联合国新闻等 8 个国际 RSS 源
-- **处理端**：不做任何关键词过滤——**所有上榜内容全部保留**；
-  英文标题由智谱 GLM-4-Flash 实时翻译为中文；
-  同一事件的多源报道可由 AI 语义归并（默认关闭）
-- **输出端**：生成 HTML 快照页存入在线归档库（可回看任意一天），
-  附带 AI 热点日报页、热度趋势页与 RSS/JSON Feed，
-  并按"早间速览 / 晚间汇总"两个时段推送精选简报
+- **采集**：newsnow 聚合 11 个国内热榜，外加 BBC、纽约时报、卫报等 8 个国际 RSS 源
+- **处理**：`frequency_words.txt` 为空即**全量模式**，所有上榜内容全部保留；
+  英文标题由 GLM-4-Flash 翻译为中文，同一事件的多源报道由 AI 语义归并
+- **输出**：每轮生成 HTML 快照并归档，另有当日汇总、AI 热点日报、热度趋势页、RSS / JSON Feed，
+  全部以静态页发布到 `reports` 分支，由 GitHub Pages 以自定义域名对外提供
 
-> 与上游 TrendRadar 的核心差异：上游是"关键词监控工具"，本项目是
-> **"全量新闻雷达"**——词组配置为空即进入全量模式，任何类目的新闻都不会被漏掉。
+> 与上游的核心差异：上游是"关键词监控工具"，本项目是**"全量新闻雷达"**。
 
 ## 站点导航
 
 | 入口 | 说明 |
 |---|---|
-| [🏠 新闻中心（门户）](https://leilaomi.github.io/hot-news-radar/) | **统一入口**：今日热榜 / 当日汇总 / 历史归档 / 配置编辑器 / 订阅生成器 |
-| [🔥 今日实时热榜](https://leilaomi.github.io/hot-news-radar/reports/latest/current.html) | 最近一轮全平台热点（每小时更新，右下角一键展开/收起）|
-| [📊 当日汇总](https://leilaomi.github.io/hot-news-radar/reports/latest/daily.html) | 全天累计去重视图 + AI 分析 |
-| [🤖 AI 热点日报](https://leilaomi.github.io/hot-news-radar/reports/ai-daily/index.html) | 每日 AI 分析五大板块独立页（最新一期 + 按日期归档）|
-| [📈 热度趋势](https://leilaomi.github.io/hot-news-radar/reports/trends.html) | 关键词/平台热度统计页 |
-| [🗂️ 历史归档](https://leilaomi.github.io/hot-news-radar/reports/archive.html) | 快照按日期分组，任意页带导航条可跳转 |
-| [⚙️ 配置编辑器](https://leilaomi.github.io/hot-news-radar/editor.html) | 网页端编辑时间线 / 关键词 / RSS 源 |
-| [🎯 订阅生成器](https://leilaomi.github.io/hot-news-radar/subscribe.html) | 浏览器里点选主题，生成 `frequency_words.txt` 片段 |
+| [🏠 新闻中心](https://news.leilaomi.abrdns.com/) | 统一入口：实时热榜 / 当日汇总 / AI 日报 / 历史 / 编辑器 / 订阅生成器 |
+| [🔥 实时热榜](https://news.leilaomi.abrdns.com/reports/latest/current.html) | 最近一轮全平台热点 |
+| [📊 当日汇总](https://news.leilaomi.abrdns.com/reports/latest/daily.html) | 当天累计去重视图 + AI 分析 |
+| [🤖 AI 热点日报](https://news.leilaomi.abrdns.com/reports/ai-daily/index.html) | AI 分析五大板块独立页，按日期归档 |
+| [📈 热度趋势](https://news.leilaomi.abrdns.com/reports/trends.html) | 关键词 / 平台热度统计 |
+| [🗂️ 历史归档](https://news.leilaomi.abrdns.com/reports/archive.html) | 快照按日期分组，快照页带「更早 / 更新」双向导航 |
+| [⚙️ 配置编辑器](https://news.leilaomi.abrdns.com/editor.html) | 网页端编辑时间线 / 关键词 / RSS，生成可粘贴的 yaml |
+| [🎯 订阅生成器](https://news.leilaomi.abrdns.com/subscribe.html) | 点选主题，生成 `frequency_words.txt` 的 `[WORD_GROUPS]` 片段 |
+| 📰 Feed | [`reports/feed.xml`](https://news.leilaomi.abrdns.com/reports/feed.xml) · [`reports/feed.json`](https://news.leilaomi.abrdns.com/reports/feed.json) |
 
-> 全站每一页顶部都有粘性导航条：`🎯 新闻中心 · 🗂 历史 · 📊 当日汇总 · 🤖 AI日报 · ⚙️ 配置`
+站点是 PWA：Service Worker 缓存名随每次发布的提交号变化，HTML、报告与 Feed 走网络优先，不会长期停留在旧页面。
+
+## 当前运行状态
+
+| 项 | 现状 |
+|---|---|
+| 主流程 | `.github/workflows/crawler.yml`（Get Hot News），cron `5,35 * * * *` |
+| 实际触发 | GitHub 定时任务会延迟、丢次，实际约每天 4–6 次，单次约 4–7 分钟 |
+| 推送窗口 | 早 06:00–10:00、晚 19:00–23:59（Asia/Shanghai），窗口内各一次 |
+| 通知渠道 | **未配置任何渠道**，窗口期只生成 AI 分析与报告页，不对外推送 |
+| 跨运行状态 | `actions/cache` 保存 `output/news`、`output/rss`、`output/ai_cache.db` |
+| 发布 | `reports` 分支 → GitHub Pages，自定义域名 `news.leilaomi.abrdns.com` |
+| Cloudflare Pages | 可选；未配置 `CLOUDFLARE_*` Secrets 时自动跳过 |
+| 测试 | 556 个 pytest 用例 + ruff（含 `scripts/`），push / PR 自动执行 |
 
 ## 功能总览
 
 | 功能 | 状态 | 说明 |
 |---|:---:|---|
-| 国内 11 平台热榜聚合 | ✅ | 头条/百度/华尔街见闻/澎湃/B站/财联社/凤凰/贴吧/微博/抖音/知乎 |
-| 国际 8 源 RSS 订阅 | ✅ | BBC/NYT/Guardian/Al Jazeera/联合国中文/HN/Yahoo Finance/FP |
-| 全量模式（无关键词过滤） | ✅ | 词组为空 = 显示全部上榜新闻 |
-| AI 标题翻译 | ✅ | GLM-4-Flash，英文源自动转中文，SQLite 缓存零重复 token |
-| 多源语义去重 | 🧪 | 同事件多源报道 AI 归并，`ai_dedup.enabled` 默认关闭 |
-| AI 趋势分析简报 | ✅ | 每日两次窗口期生成，上限 300 条素材 |
-| AI 热点日报页 | ✅ | 五大板块独立网页，随每日汇总自动生成（默认开启） |
-| 关键词订阅生成器 | ✅ | 纯静态页，10 组预设主题 + 自定义组合，生成词组配置片段 |
-| 热度趋势页 / RSS + JSON Feed | ✅ | `trends.html` / `feed.xml` + `feed.json` 随发布自动生成 |
-| 双时段定时推送 | ✅ | 早 07:30~08:30 速览 / 晚 20:30~21:30 全天汇总 |
-| 历史快照归档 | ✅ | 每小时一份 HTML 存档 + 按日期分组归档页 |
-| 可视化配置编辑器 | ✅ | 浏览器里直接改关键词/时间线/RSS |
-| 单元测试 + Lint | ✅ | 154 个 pytest 用例 + ruff，push 到 master 自动执行 |
-| 零服务器成本 | ✅ | 全程跑在 GitHub Actions 免费额度内 |
+| 国内 11 平台热榜 | ✅ | 头条 / 百度 / 华尔街见闻 / 澎湃 / B站 / 财联社 / 凤凰 / 贴吧 / 微博 / 抖音 / 知乎 |
+| 国际 8 源 RSS | ✅ | BBC / NYT / Guardian / Al Jazeera / 联合国新闻 / Foreign Policy / HN / Yahoo Finance |
+| 全量模式 | ✅ | 词组为空 = 显示全部上榜新闻 |
+| AI 标题翻译 | ✅ | 默认只翻 RSS 与独立展示区；编号严格对齐，对不齐就拆批重试，不按行序硬套 |
+| AI 语义去重 | ✅ | 多源同事件归并，默认开启；单组超过 5 条视为不可信并拆回 |
+| AI 趋势分析 | ✅ | 早晚窗口内各一次，最多 300 条素材 |
+| AI 热点日报页 | ✅ | 晚间 daily 模式分析成功后生成 |
+| 历史快照归档 | ✅ | 每轮一份 HTML，90 天内保留小时级明细 |
+| 热度趋势 / Feed | ✅ | `trends.html`、`feed.xml`、`feed.json` 每轮重建 |
+| 配置编辑器 / 订阅生成器 | ✅ | 纯静态页，浏览器本地生成配置片段 |
+| 多渠道推送 | ⏸ | 代码就绪（飞书 / 钉钉 / 企微 / Telegram / 邮件 / ntfy / Bark / Slack / 通用 Webhook），本站未启用 |
+| MCP Server | ✅ | 27 个工具，可接 Cherry Studio 等客户端 |
+| 零服务器成本 | ✅ | 公共仓库 Actions 免费 |
 
-## 环境要求
-
-**方式一：GitHub Actions（推荐，零环境）**
-
-只需一个 GitHub 账号 + 若干 Secrets（见[部署指南](#部署指南)），其余全部由 CI 完成。
-
-**方式二：本地 / Docker 自建**
-
-| 依赖 | 版本 | 用途 |
-|---|---|---|
-| Python | ≥ 3.12 | 引擎运行（用了 `zoneinfo` 等新特性） |
-| [uv](https://docs.astral.sh/uv/) | 任意近期版 | 依赖管理与运行入口（`uv sync` / `uv run`） |
-| Node.js | ≥ 18（可选） | 仅 `scripts/test_injected_js.py` 回归脚本做内联 JS 语法校验用 |
-| Docker | 可选 | 常驻部署，见 `docker/docker-compose.yml` |
-
-## 数据源清单
+## 数据源
 
 ### 国内热榜（11 个）
 
-今日头条 · 百度热搜 · 华尔街见闻 · 澎湃新闻 · bilibili 热搜 · 财联社 · 凤凰网 · 百度贴吧 · 微博热搜 · 抖音热点 · 知乎热榜
+今日头条 · 百度热搜 · 华尔街见闻 · 澎湃新闻 · bilibili 热搜 · 财联社热门 · 凤凰网 · 贴吧 · 微博 · 抖音 · 知乎
 
-> 数据经 [newsnow](https://github.com/ourongxing/newsnow) 公共 API 聚合，支持在
-> `config.yaml → platforms.sources` 中增删或自建 API 地址（`api_url` 字段）。
+数据经 [newsnow](https://github.com/ourongxing/newsnow) 公共 API 聚合。缓存过期或返回空数据会计为该平台失败，
+可在 `config.yaml → platforms.sources` 增删平台或改 `api_url` 自建。
 
 ### 国际 RSS（8 个）
 
-| 源 | 类型 | 说明 |
-|---|---|---|
-| BBC News | 综合国际 | 全球头条 |
-| The New York Times | 综合国际 | World 版块 |
-| The Guardian | 综合国际 | World 版块 |
-| Al Jazeera | 综合国际 | 中东及全球视角 |
-| 联合国新闻 | 综合（中文原生） | 联合国系统官方动态 |
-| Hacker News | 科技社区 | 创业与技术圈风向 |
-| Yahoo Finance | 财经 | 全球市场动态 |
-| Foreign Policy | 国际关系 | 深度外交政策分析 |
+| 源 | 类型 |
+|---|---|
+| BBC News | 综合国际 |
+| The New York Times | 综合国际（World） |
+| The Guardian | 综合国际（World） |
+| Al Jazeera | 中东及全球视角 |
+| 联合国新闻 | 中文原生 |
+| Foreign Policy | 国际关系 |
+| Hacker News | 科技社区 |
+| Yahoo Finance | 财经 |
 
-英文源标题会由 AI 自动翻译为中文后展示。新增源只需编辑
-`config/config.yaml → rss.feeds`，填 `id / name / url / max_age_days` 四项即可。
+RSS 请求带重试，按字节流交给 feedparser 解码；新鲜度过滤只保留近期文章。新增源编辑
+`config/config.yaml → rss.feeds`，填 `id / name / url / max_age_days` 即可。
 
 ## 运行机制
 
 ```
-GitHub Actions (cron :33 每小时)
-        │
-        ▼
-┌─ 采集层 ─────────────────────────────┐
-│ newsnow API ──► 11 个国内热榜          │
-│ RSS Parser  ──► 8 个国际订阅源         │
-│   (新鲜度过滤: 仅推送24h内文章)          │
-└──────────────┬───────────────────────┘
-               ▼
-┌─ 处理层 ─────────────────────────────┐
-│ frequency_words.txt 为空 → 全量放行     │
-│ SQLite 本地存储（guid 去重）            │
-│ GLM-4-Flash: 翻译英文标题               │
-│ (可选) AI 语义去重: 同事件多源归并        │
-│ 时间窗内: AI 筛选 + 趋势分析            │
-└──────────────┬───────────────────────┘
-               ▼
-┌─ 输出层 ─────────────────────────────┐
-│ output/html/YYYY-MM-DD/HH-MM.html 快照 │
-│ gen_archive/gen_daily_index/gen_feed   │
-│ build_trends → 归档/索引/Feed/趋势页    │
-│ (daily 模式) AI 日报页 ai-daily/       │
-│ sync_reports_branch.py → reports 分支   │
-│   → GitHub Pages 在线浏览               │
-│ 推送渠道: 飞书/TG/邮件/Bark/ntfy...     │
-└──────────────────────────────────────┘
+GitHub Actions  cron 5,35 * * * *（实际约每天 4–6 次）
+   │
+   ├─ 还原 reports 分支历史 → docs/reports/
+   ├─ actions/cache 还原 output/news、output/rss、output/ai_cache.db
+   │
+   ├─ python -m trendradar
+   │    采集：newsnow 11 热榜 + 8 RSS
+   │    调度：先解析当前时段（窗口 / 报告模式 / 是否分析、推送），RSS 同样使用解析后的模式
+   │    存储：SQLite，按天一库，guid 去重
+   │    AI：翻译 → 语义去重 → 窗口内筛选 + 趋势分析（共享 480 秒预算）
+   │    输出：output/html/YYYY-MM-DD/HH-MM.html 快照 + latest/*.html
+   │    推送：仅窗口内、每窗口一次；没有配置渠道则跳过
+   │
+   ├─ 发布：gen_daily_index → gen_archive → gen_feed → build_trends → retention
+   │    当日汇总过期时，以 RENDER_ONLY 模式补渲染 daily.html（不抓取、不调 AI、不推送）
+   │
+   ├─ actions/cache 保存状态（即使后续步骤失败也保存）
+   ├─ sync_reports_branch.py → reports 分支（带基线校验，不会覆盖并发运行的快照）
+   ├─ （可选）部署 Cloudflare Pages
+   └─ 失败、取消或超时时发 ntfy 告警（需配置 NTFY_TOPIC）
 ```
 
-## 每日时间线
+### 退出码
 
-当前启用 **custom「早晚各一次」模板**（`config/timeline.yaml`）：
+| 退出码 | 含义 |
+|---|---|
+| `0` | 成功；部分平台失败、RSS / AI / 推送失败只记警告 |
+| `1` | 致命：热榜平台全部失败、存储写入失败、报告渲染失败、配置错误、未处理异常 |
+| `2` | 平台失败比例超过 `PLATFORM_FAILURE_THRESHOLD`（默认 1.0，即不启用） |
 
-| 时段 | 窗口 | 行为 |
+非零退出会让 workflow 变红并触发失败告警。即使热榜全挂，也会先降级生成只含 RSS 的报告。
+
+## 调度与时段
+
+当前使用 `config/timeline.yaml` 的 **custom「早晚各一次」** 模板：
+
+| 时段 | 窗口（Asia/Shanghai） | 行为 |
 |---|---|---|
-| 默认（窗口外） | 其余时间 | 只采集入库，不打扰 |
-| ☀️ 早班速览 | 07:30 ~ 08:30 | 推送当前热榜速览 + AI 分析（仅一次） |
-| 🌙 晚间汇总 | 20:30 ~ 21:30 | 推送当日累计汇总 + AI 分析（仅一次） |
+| 默认 | 其余时间 | 只采集入库，不分析、不推送 |
+| ☀️ 早班速览 | 06:00–10:00 | current 模式：当前在榜热点 + AI 分析，窗口内一次 |
+| 🌙 晚间汇总 | 19:00–23:59 | daily 模式：全天累计 + AI 分析 + AI 日报页，窗口内一次 |
 
-修改时间：编辑 `config/timeline.yaml → custom.periods`，或用
-[网页编辑器](https://leilaomi.github.io/hot-news-radar/editor.html) 直接拖拽。
+- **为什么窗口这么宽**：GitHub 的定时任务实际只跑约每天 4–6 次，时间也不固定。
+  按真实触发记录回放，1 小时窗口只有约三分之一的天能命中；放宽后早窗 28/28 天、晚窗 23/28 天命中。
+- **"一次"如何保证**：once 记录写在 SQLite 里，随 `actions/cache` 跨运行保留；
+  推送全部失败时会撤销本窗口的分析记账，下一轮可重试。
+- **晚窗止于 23:59**：once 按自然日记账，跨午夜的窗口会在 00:00 后重复执行。
+- 修改窗口：编辑 `config/timeline.yaml → custom.periods`，或用配置编辑器生成后粘贴。
 
-## AI 能力说明
+## AI 能力
 
-| 能力 | 模型 | 触发时机 | 开关 |
-|---|---|---|---|
-| 标题翻译 | GLM-4-Flash | 每轮运行时对英文 RSS 源执行 | 默认开（配 Key 即生效） |
-| 智能筛选 | GLM-4-Flash | 仅在早晚推送窗口内执行 | 默认开 |
-| 趋势分析 | GLM-4-Flash | 仅在早晚推送窗口内执行 | 默认开 |
-| 语义去重 | GLM-4-Flash | 每轮统计筛选后、AI 分析前批量归并 | `ai_dedup.enabled`，**默认关** |
-| AI 日报页 | GLM-4-Flash | daily 模式且分析成功后生成网页 | `ai_daily.enabled`，默认开 |
-
-- 模型路由：`openai/glm-4-flash` + 端点 `https://open.bigmodel.cn/api/paas/v4`
-  （走 OpenAI 兼容协议，稳定且不受 LiteLLM 版本影响）
-- Key 配置：仓库 Secrets 的 `AI_API_KEY`（[bigmodel.cn 免费注册](https://open.bigmodel.cn)）
-- 免费额度完全够用；如需换模型改 `config.yaml → ai.model` 即可
-- 分批保护：`batch_size: 100 / batch_interval: 2s`，避免大量标题单次请求溢出
-- 翻译/分析/去重结果均落 SQLite 缓存（`output/ai_cache.db`），同输入零 token 复用；
-  去重或任何 AI 环节失败时**静默降级**为不去重/无分析，不影响主流程
-
-## 历史归档
-
-- **入口**：[新闻中心门户](https://leilaomi.github.io/hot-news-radar/) → 🗂️ 历史归档
-- 每小时快照按 `YYYY-MM-DD/HH-MM.html` 归档，归档页显示覆盖天数/快照总数/单日峰值
-- 归档页由 `scripts/gen_archive.py` 在每轮发布时重新生成
-- **分层保留策略**（`scripts/retention.py`，默认 `KEEP_FULL_DAYS=90`）：
-
-  | 数据 | 保留方式 |
-  |---|---|
-  | 90 天内 | 保留全部小时级快照 |
-  | 超过 90 天 | 仅保留当日 `daily.html` 聚合页，删除小时级明细 |
-  | 永久保留 | `archive.html` 索引、`trends.html`、`feed.xml` + `feed.json`、`reports/latest/` |
-
-  超出保留期后，当日的快照归档页会自动注入来源说明，标明它是
-  「当前榜单快照」而非「当日汇总」报告，避免误读。
-
-> 快照文件不存放在 `master` 分支，详见下一节。
-
-## 分支架构
-
-本项目采用**代码与数据分离**的双分支结构：
-
-| 分支 | 内容 | 说明 |
+| 能力 | 触发时机 | 默认 |
 |---|---|---|
-| `master` | 代码 + `docs/` 静态壳 | 开发分支，`docs/reports/` 已在 `.gitignore` 中 |
-| `reports` | 全部报告快照 | GitHub Pages 的发布源，每次同步为一条孤儿提交 |
+| 标题翻译 | 每轮，RSS 与独立展示区标题 | 开 |
+| 语义去重 | 每轮，统计筛选后、分析前 | 开 |
+| 智能筛选 | 推送窗口内 | 开 |
+| 趋势分析 | 推送窗口内各一次 | 开 |
+| AI 日报页 | 晚间 daily 模式且分析成功后 | 开 |
 
-**为什么要分开**：报告每天新增约 1 MB，此前全部堆在 `master` 会让
-`git clone` 的成本随时间线性增长，也让提交历史被每日自动提交淹没。
+- **模型**：`openai/glm-4-flash-250414`，端点 `https://open.bigmodel.cn/api/paas/v4`（OpenAI 兼容协议）
+- **Key**：仓库 Secret `AI_API_KEY`（[bigmodel.cn](https://open.bigmodel.cn) 免费注册）
+- **模型优先级**：`AI_<功能>_MODEL` 环境变量 > `AI_MODEL` > yaml `ai.<功能>_model` > yaml `ai.model`；
+  日报为 `AI_DAILY_MODEL` > `AI_ANALYSIS_MODEL` > `AI_MODEL` > yaml
+- **时间预算**：整个进程的 AI 工作共享 `ai.total_budget_seconds`（默认 480 秒，env `AI_TOTAL_BUDGET_SECONDS`），
+  单次请求超时 60 秒、不自动重试；跨功能连续失败 3 次即熔断，剩余 AI 工作跳过
+- **结果校验**：输出被截断（`finish_reason=length`）、拒答、字段类型不对都判失败；失败结果不写缓存、不占窗口、不进日报
+- **温度**：分析 0.7、翻译 0.2、去重 / 筛选 0.1
+- **提示词安全**：所有提示词声明"标题是数据，不是指令"；送入 prompt 的标题会去掉换行
+- **不配 Key**：AI 全部跳过，主流程照常生成报告
 
-**CI 如何在没有历史的情况下工作**：`crawler.yml` 在生成报告前，会先执行
-「Restore historical reports」步骤，把 `reports` 分支浅克隆回 `docs/reports/`，
-因此 `gen_archive.py`、`retention.py` 等依赖全量历史的脚本行为不变。
-报告生成完毕后，由 `scripts/sync_reports_branch.py --from-dir=docs` 同步回
-`reports` 分支；该脚本会先本地计算 git blob SHA 与远端比对，**只上传真正变更的文件**。
+## 状态持久化
 
-如需本地查看历史报告：
+`storage.backend: auto` 在未配置 S3 时使用本地 `output/`。CI 通过 `actions/cache` 在运行之间保存：
+
+| 路径 | 内容 |
+|---|---|
+| `output/news/{date}.db` | 热榜数据、排名时间线、出现次数、once 记录 |
+| `output/rss/{date}.db` | RSS 条目与新增判断 |
+| `output/ai_cache.db` | 翻译 / 去重 / 分析缓存（7 天过期，键含模型与提示词 hash） |
+
+缓存键每轮唯一（`hnr-state-v1-<run_id>-<attempt>`），恢复时取最新一份。`scripts/check_state.py`
+会打印恢复情况，若凌晨 2 点后当天库仍只有不超过 1 次抓取会给出警告。也可配置 S3（`S3_*` Secrets）走远程存储，
+远程写入使用 ETag 条件写，冲突时拒绝覆盖。
+
+## 分支与发布
+
+| 分支 | 内容 |
+|---|---|
+| `master` | 代码 + `docs/` 静态壳；`docs/reports/` 被 `.gitignore` 忽略 |
+| `reports` | 全部报告快照，GitHub Pages 发布源（`CNAME` = `news.leilaomi.abrdns.com`） |
+
+- CI 先把 `reports` 浅克隆回 `docs/reports/`，生成完毕再由 `scripts/sync_reports_branch.py` 推回。
+- 同步使用 `--force-with-lease` 绑定基线提交；若其他运行先推了，合并对方新快照后重试（最多 3 次），
+  最后用 `ls-remote` 确认分支确实指向自己的提交。
+- **分层保留**（`scripts/retention.py`，`KEEP_FULL_DAYS=90`）：90 天内保留全部小时快照，
+  超过后只留当日 `daily.html`；`archive.html`、`trends.html`、Feed、`latest/` 永久保留。
+
+本地查看历史报告：
 
 ```bash
-git clone --depth 1 --branch reports \
-  https://github.com/LeilaoMi/hot-news-radar.git reports-only
+git clone --depth 1 --branch reports https://github.com/LeilaoMi/hot-news-radar.git reports-only
 ```
 
 ## 部署指南
 
-1. Fork 或导入本仓库到你的 GitHub 账号
-2. 仓库 Settings → Secrets and variables → Actions，添加：
+1. Fork 本仓库，启用 Actions。
+2. Settings → Secrets and variables → Actions，按需添加：
 
 | Secret | 必填 | 用途 |
 |---|:---:|---|
-| `FEISHU_WEBHOOK_URL` | 推荐 | 飞书群机器人 webhook |
-| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | 可选 | Telegram 推送 |
-| `BARK_URL` / `NTFY_TOPIC` | 可选 | iOS / Android 免 App 推送 |
-| `EMAIL_FROM/PASSWORD/TO/SMTP_SERVER/SMTP_PORT` | 可选 | 邮件推送 |
-| `AI_API_KEY` | 推荐 | 智谱 key（免费），启用 AI 翻译/分析 |
-| `AI_ANALYSIS_MODEL` | 可选 | AI 分析独立模型（如推理模型），不配则沿用 `AI_MODEL`；也可用 yaml `ai.analysis_model` |
-| `AI_DEDUP_ENABLED` / `AI_DAILY_ENABLED` | 可选 | 环境级开关语义去重 / AI 日报页（覆盖 yaml 配置） |
-| `CLOUDFLARE_API_TOKEN/_ACCOUNT_ID/_PROJECT_NAME` | 可选 | 加配后自动部署 CF Pages，国内访问加速 |
+| `AI_API_KEY` | 推荐 | 智谱 Key，启用翻译 / 去重 / 分析 / 日报 |
+| `AI_MODEL` / `AI_ANALYSIS_MODEL` / `AI_API_BASE` | 可选 | 覆盖模型与端点 |
+| `AI_TIMEOUT` | 可选 | 单次请求超时 |
+| `AI_ANALYSIS_ENABLED` / `AI_TRANSLATION_ENABLED` / `AI_DEDUP_ENABLED` / `AI_DAILY_ENABLED` / `AI_FILTER_ENABLED` | 可选 | 环境级开关，覆盖 yaml |
+| `AI_TRANSLATION_LANGUAGE` | 可选 | 翻译目标语言 |
+| `S3_BUCKET_NAME` / `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` / `S3_ENDPOINT_URL` / `S3_REGION` | 可选 | 远程存储（替代 actions/cache） |
+| `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_PROJECT_NAME` | 可选 | 额外部署到 Cloudflare Pages |
+| `NTFY_TOPIC` / `NTFY_SERVER_URL` / `NTFY_TOKEN` | 可选 | 运行失败告警（见[已知限制](#已知限制)） |
+| 飞书 / 钉钉 / 企微 / Telegram / 邮件 / Bark / Slack / 通用 Webhook | 可选 | 推送渠道，变量名见 `crawler.yml`，不配即不推送 |
 
-3. Actions 页手动触发 **Get Hot News** 一次验证链路
-4. （可选）本地调试见下一节
+3. 在 Settings → Pages 选择 `reports` 分支作为发布源；如用自定义域名，修改 `docs/CNAME`。
+4. Actions 页手动运行一次 **Get Hot News** 验证链路。第一次运行缓存未命中，`check_state` 会警告一次，属正常。
 
-> 💡 **翻译缓存**：AI 翻译结果默认缓存于 `output/ai_cache.db`，同一标题跨运行、跨批次、daily 补跑均零 token 复用。
-> 设环境变量 `AI_CACHE_ENABLED=false` 关闭；`AI_CACHE_DB` 可自定义缓存路径（Docker 常驻部署请把该文件挂进持久卷）。
+所有第三方 Action 均固定到完整 commit SHA，各 job 只授予最小权限，checkout 不保留凭据。
 
 ## 本地运行
 
 ```bash
 git clone https://github.com/LeilaoMi/hot-news-radar.git
 cd hot-news-radar
-uv sync --frozen --no-dev
-cp docker/.env.example .env    # 按需填写
-uv run python -m trendradar    # 手动跑一轮
+uv sync --frozen
+cp docker/.env.example .env      # 按需填写
+uv run python -m trendradar      # 跑一轮
 ```
 
-- **一键脚本**：Windows 双击 `setup-windows.bat`（英文控制台用 `setup-windows-en.bat`），
-  macOS/Linux 运行 `./setup-mac.sh`；本地预览网页用 `start-http.bat` / `start-http.sh`
-- **测试**：`uv run --with pytest pytest`（154 个用例）
-- **Lint**：`ruff check .`（规则见 `pyproject.toml [tool.ruff]`）
-- **回归工具**：`python scripts/regression_check.py`（单测/语法/导入三合一）
-- Docker 方式见 `docker/docker-compose.yml`
+常用环境变量：
+
+| 变量 | 作用 |
+|---|---|
+| `REPORT_MODE=current\|daily\|incremental` | 指定报告模式 |
+| `SCHEDULE_ENABLED=false` | 关闭时间线调度 |
+| `RENDER_ONLY=true` | 只用已有数据渲染 `output/html/latest/{mode}.html`，不抓取、不调 AI、不推送；无数据时退出码 1 |
+| `NOTIFICATION_ENABLED=false` | 单独关闭推送 |
+
+- **体检**：`uv run python -m trendradar --doctor`
+- **测试**：`uv run --with pytest pytest`（556 个用例）
+- **Lint**：`uv run --with ruff ruff check .`
+- **回归**：`python scripts/regression_check.py`、`python scripts/test_injected_js.py`
+- **一键脚本**：`setup-windows.bat` / `setup-mac.sh`；本地预览 `start-http.sh` / `start-http.bat`（默认只监听 127.0.0.1）
+
+## Docker 与 MCP
+
+```bash
+cd docker
+cp .env.example .env     # MCP 容器必须设置 MCP_AUTH_TOKEN（≥16 位）
+docker compose -f docker-compose-build.yml up -d --build
+```
+
+- 默认镜像为本地构建的 `trendradar:local` / `trendradar-mcp:local`，可在 `docker/.env` 设置 `TRENDRADAR_IMAGE` / `TRENDRADAR_MCP_IMAGE` 改用已发布镜像。
+- 两个镜像都以非 root 用户（uid 10001）运行，带 HEALTHCHECK，基础镜像固定 digest。
+- `RUN_MODE=once` 运行结束后不会被 restart 策略反复拉起；内置报告 Web 服务不列目录、不提供 `.db` 文件。
+- **把 `output/` 挂进持久卷**，否则 once、新增检测和 AI 缓存都会在重启后丢失。
+
+**MCP Server**（`mcp_server/`，版本见 `version_mcp`）：
+
+| 变量 | 说明 |
+|---|---|
+| `MCP_HOST` | HTTP 监听地址，默认 `127.0.0.1` |
+| `MCP_PORT` | 宿主机端口，容器内固定 3333 |
+| `MCP_AUTH_TOKEN` | Bearer Token；监听非回环地址时必填，否则拒绝启动 |
+| `MCP_ALLOWED_HOSTS` / `MCP_ALLOWED_ORIGINS` | 额外允许的 Host / Origin（默认开启 DNS rebinding 防护） |
+| `MCP_ENABLE_SIDE_EFFECT_TOOLS` | 是否开放会抓取、同步、发送的工具 |
+
+stdio 模式下 stdout 只输出 JSON-RPC，日志走 stderr；返回给客户端的错误会脱敏 webhook、token 与密钥。
+接入方法见 [README-MCP-FAQ.md](README-MCP-FAQ.md) 与 [README-Cherry-Studio.md](README-Cherry-Studio.md)。
 
 ## 配置详解
 
-核心文件都在 `config/` 下，改完无需重启（下轮运行自动生效）：
+所有配置在 `config/`，下一轮运行自动生效：
 
 | 文件 | 作用 |
 |---|---|
-| `config.yaml` | 主配置：数据源开关 / RSS / AI / 推送渠道 / 报告样式 |
-| `frequency_words.txt` | 关键词组。**当前为空 = 全量模式**；语法见文件内注释（必须词+/ 过滤词！ 正则// 别名=> 上限@） |
-| `timeline.yaml` | 调度模板：时段窗口 / 是否分析 / 是否推送 / 星期映射 |
-| `ai_analysis_prompt.txt` | AI 分析提示词（v2.0.0，JSON 输出格式） |
-| `ai_translation_prompt.txt` | 翻译提示词（v1.2.0） |
-| `ai_dedup_prompt.txt` | 语义去重提示词（分组归并判定） |
-| `ai_filter/` | AI 智能筛选管线提示词（筛选/标签/抽取） |
-| `ai_interests.txt` | 用户兴趣描述（筛选管线用） |
+| `config.yaml` | 主配置：平台 / RSS / 存储 / AI / 推送 / 报告样式 |
+| `timeline.yaml` | 调度模板：时段窗口、报告模式、是否分析 / 推送、once |
+| `frequency_words.txt` | 关键词组，**当前为空 = 全量模式** |
+| `ai_analysis_prompt.txt` / `ai_translation_prompt.txt` / `ai_dedup_prompt.txt` | AI 提示词 |
+| `ai_filter/` / `ai_interests.txt` | AI 智能筛选管线提示词与兴趣描述 |
 
-常用调整示例：
+`frequency_words.txt` 语法：`[WORD_GROUPS]` 下每组一段（空行分隔），`+` 必须词、`!` 过滤词（全局生效）、
+`/正则/`、`=>` 别名、`@` 上限，`\#` 转义井号；`[GLOBAL_FILTER]` 写全局排除词，支持正则。
+订阅生成器输出的就是这个格式。
 
 ```yaml
-# config.yaml — 只想看某个平台的新闻？
+# 关闭某个平台
 platforms:
   sources:
     - id: "weibo"
       name: "微博"
-      enabled: false        # 改成 false 即关闭该平台
+      enabled: false
 
-# rss — 新增一个源
+# 新增 RSS 源
 rss:
   feeds:
     - id: "my-feed"
       name: "我的订阅"
       url: "https://example.com/rss.xml"
-      max_age_days: 1       # 只推 24 小时内的
+      max_age_days: 1
 
-# ai — 语义去重（默认关）与 AI 日报页（默认开）
-ai_dedup:
-  enabled: false            # 开启后多源同事件归并为一条
-  batch_size: 30
-ai_daily:
-  enabled: true             # daily 模式生成 AI 日报网页
+# AI 预算与缓存
+ai:
+  total_budget_seconds: 480
+  cache_ttl_days: 7
 ```
 
-不想改文件？用[订阅生成器](https://leilaomi.github.io/hot-news-radar/subscribe.html)
-点选主题生成 `frequency_words.txt` 片段，或用
-[配置编辑器](https://leilaomi.github.io/hot-news-radar/editor.html) 在线改 yaml。
+`timeline.yaml` 中 `collect: false` 会跳过该时段的抓取，`platforms.enabled: false` 只关热榜、RSS 照常；
+时间请加引号（如 `"06:00"`），未加引号会给出提示。
+
+## 安全设计
+
+- **链接白名单**：热榜、RSS（含 JSON Feed）进入 HTML 和推送的所有链接只放行 `http` / `https`，
+  对大小写、实体编码、控制字符混淆都做了检查；外链统一 `rel="noopener noreferrer"`。
+- **CSP**：报告页、RSS 页、AI 日报页带 Content-Security-Policy。
+- **编辑器**：配置值转义后再进入页面，不用 `innerHTML` 拼接用户内容。
+- **推送内容**：各渠道全量转义，中和 `@所有人` / `<!channel>` 等群体提醒；日志中 token、webhook、chat_id 全部打码。
+- **CI**：最小权限、Action 固定 SHA、Secrets 只注入需要的步骤；补渲染步骤不注入任何推送渠道 Secret。
+- **依赖**：mcp 1.30.0、starlette 1.8.0、urllib3 2.8.0、aiohttp 3.14.5、litellm 1.104.3，`pip-audit` 无已知漏洞。
+  **切勿使用 litellm 1.82.7 / 1.82.8**（已确认的投毒版本）。
 
 ## 目录结构
 
@@ -322,84 +363,80 @@ ai_daily:
 hot-news-radar/
 ├── .github/
 │   ├── workflows/
-│   │   ├── crawler.yml      # 主流程：抓取→AI→报告→发布→同步
-│   │   ├── test.yml         # pytest（push/PR 触发）
-│   │   ├── lint.yml         # ruff 检查
-│   │   ├── docker.yml       # 镜像构建
-│   │   └── issue-guard.yml  # Issue 模板守卫
-│   └── ISSUE_TEMPLATE/      # Bug/功能/AI配置 三类 issue 模板
-├── trendradar/              # 核心 Python 引擎（来自上游 v6.10.0）
-│   ├── ai/                  #   客户端/缓存/筛选管线/翻译/去重/分析服务
-│   │   └── dedup.py         #   多源语义去重（P2-1）
-│   ├── core/                #   配置加载/调度器/频率词解析
-│   ├── crawler/             #   热榜抓取 + RSS 处理器
-│   ├── notification/        #   多渠道推送分发
-│   ├── report/              #   HTML/Markdown 报告渲染 + 数据准备
-│   │   └── ai_daily.py      #   AI 日报页生成（P2-3）
-│   ├── storage/             #   SQLite 存储 + guid 去重
-│   └── commands/            #   doctor/status/version/test-notification
-├── mcp_server/              # MCP Server（可接 Cherry Studio 等，见 README-MCP-FAQ.md）
-├── tests/                   # 154 个 pytest 用例（AI 缓存/去重/日报/词频/存储/新鲜度…）
+│   │   ├── crawler.yml        # 主流程：还原 → 抓取/AI → 发布 → 保存状态 → 同步 → 告警
+│   │   ├── test.yml           # pytest
+│   │   ├── lint.yml           # ruff（含 scripts/）
+│   │   ├── docker.yml         # 镜像构建
+│   │   └── issue-guard.yml    # Issue 模板守卫
+│   └── ISSUE_TEMPLATE/
+├── trendradar/                # 核心引擎
+│   ├── __main__.py            #   主流程、退出码、RENDER_ONLY
+│   ├── ai/                    #   客户端 / 预算 / 设置 / 缓存 / 翻译 / 去重 / 筛选 / 分析
+│   ├── core/                  #   配置加载 / 调度器 / 频率词
+│   ├── crawler/               #   热榜抓取 + RSS
+│   ├── notification/          #   多渠道推送（转义、分批、脱敏）
+│   ├── report/                #   HTML 渲染、AI 日报页
+│   ├── storage/               #   SQLite / S3 存储
+│   ├── utils/                 #   时间、URL 白名单、环境变量解析
+│   └── commands/              #   doctor / status / version / test-notification
+├── mcp_server/                # MCP Server
+├── tests/                     # 556 个 pytest 用例
 ├── scripts/
-│   ├── gen_archive.py       # 归档索引页生成器
-│   ├── gen_daily_index.py   # 当日索引页
-│   ├── gen_feed.py          # RSS + JSON Feed 生成
-│   ├── build_trends.py      # 热度趋势页
-│   ├── retention.py         # 分层保留策略（90 天）
-│   ├── sync_reports_branch.py  # 增量同步 docs/ 到 reports 分支
-│   ├── check_daily_freshness.py # 校验当日汇总新鲜度
-│   ├── regression_check.py  # 回归检查（单测/语法/导入）
-│   ├── test_injected_js.py  # 归档页内联 JS 校验
-│   └── test_web_pages.py    # 线上页面可用性校验（Playwright）
-├── config/                  # 所有用户配置（见上表）
-├── docs/                    # GitHub Pages 静态壳
-│   ├── index.html           # 新闻中心门户
-│   ├── editor.html          # 可视化配置编辑器
-│   ├── subscribe.html       # 关键词订阅生成器（P2-4）
-│   ├── vendor/              # 编辑器本地依赖（tailwind/fontawesome/js-yaml/sortable）
-│   ├── assets/ + manifest/sw/icon/CNAME   # PWA 与站点资源
-│   └── reports/             # 运行时目录，已被 .gitignore 忽略
-├── docker/                  # Docker 部署（Dockerfile / compose / manage.py）
-├── index.html               # 最新报告页（Actions 每轮生成，CF Pages 部署源）
-├── version / version_configs / version_mcp   # 在线更新检查版本锚点
-└── setup-*.bat|sh / start-http.*             # 本地一键部署与预览脚本
+│   ├── check_state.py         # 打印恢复的跨运行状态
+│   ├── check_daily_freshness.py  # 当日汇总是否为今天（Asia/Shanghai）且 ≤24h
+│   ├── gen_daily_index.py / gen_archive.py / gen_feed.py / build_trends.py
+│   ├── retention.py           # 90 天分层保留
+│   ├── sync_reports_branch.py # 带基线校验地同步到 reports 分支
+│   ├── site_common.py         # 站点脚本公共函数
+│   ├── regression_check.py / test_injected_js.py / test_web_pages.py
+├── config/                    # 用户配置
+├── docs/                      # Pages 静态壳：门户 / 编辑器 / 订阅生成器 / sw.js / vendor
+│   └── reports/               # 运行时由 reports 分支还原，不入库
+├── docker/                    # Dockerfile / Dockerfile.mcp / compose / entrypoint
+├── version / version_configs / version_mcp
+└── setup-*.bat|sh / start-http.*
 ```
 
-> `docs/reports/` 在 CI 运行时由 `reports` 分支还原，本地不入库。
-> 完整报告快照见 [`reports` 分支](https://github.com/LeilaoMi/hot-news-radar/tree/reports)。
+## 已知限制
+
+- **GitHub 定时不准**：cron 写的是每 30 分钟，实际每天只有 4–6 次且时间漂移。
+  个别天晚窗（19:00–23:59）内一次都没跑到，当天就没有晚间汇总分析。需要精确触发时，
+  可用外部定时器调用 `workflow_dispatch`。
+- **`NTFY_TOPIC` 有双重含义**：它既是失败告警的 topic，也会让引擎把完整报告推到同一 topic
+  （loader 默认服务器为 `https://ntfy.sh`）。只想要告警时，暂时不要设置它，等告警拆出独立变量。
+- **午夜边界**：一轮运行如果在 23:59 前开始、00:00 后才保存，可能读到新一天的空库而以退出码 1 结束，下一轮自动恢复。
+- **编辑器尚未加 CSP**：页面依赖大量内联 onclick，需重构后再加。
+- AI 翻译的超时只在批次之间检查，单个批次仍受单次请求超时（60 秒）约束。
 
 ## 常见问题
 
-**Q: 为什么叫"全量模式"？和关键词监控有什么区别？**
-A: 引擎逻辑是"词组为空 → 所有标题匹配"。上游 TrendRadar 设计初衷是监控特定话题，
-本项目把词组清空，让它变成一个纯粹的新闻聚合雷达，任何热点都不漏。
-想恢复定向监控？往 `frequency_words.txt` 加词组（可用[订阅生成器](https://leilaomi.github.io/hot-news-radar/subscribe.html)生成）。
+**Q：为什么叫"全量模式"？**
+引擎逻辑是"词组为空 → 所有标题匹配"。想恢复定向监控，往 `frequency_words.txt` 的 `[WORD_GROUPS]` 加词组即可，
+可以用[订阅生成器](https://news.leilaomi.abrdns.com/subscribe.html)生成。
 
-**Q: 每小时跑一次会不会超 GitHub Actions 免费额度？**
-A: 公共仓库 Actions 完全免费；私有仓库每月 2000 分钟，本任务单次约 3 分钟，
-每小时一次 ≈ 2160 分钟/月，建议保持公共仓库或降到每 2 小时一次（改 cron 第一个字段）。
+**Q：为什么有些天快照少？**
+快照数等于当天 GitHub 实际触发的次数，通常 4–6 个。
 
-**Q: AI 是必须的吗？**
-A: 不是。不配 `AI_API_KEY` 时系统回退到纯关键词/无过滤展示，只是没有翻译、分析和日报页。
+**Q：会超 Actions 免费额度吗？**
+公共仓库免费。私有仓库每月 2000 分钟，按每天约 5 次、每次约 6 分钟计约 900 分钟 / 月。
 
-**Q: 为什么有些天快照少？**
-A: 快照数量取决于当天的调度窗口与 GitHub Actions 偶发的排队延迟，属正常现象。
+**Q：AI 是必须的吗？**
+不是。不配 `AI_API_KEY` 时跳过所有 AI 环节，报告照常生成。
 
-**Q: 克隆下来的仓库里为什么没有历史报告？**
-A: 报告在 `reports` 分支，`master` 只放代码。`docs/reports/` 已被 `.gitignore`
-忽略，CI 运行时才会从 `reports` 分支还原。需要历史数据就
-`git clone --depth 1 --branch reports ...`，或直接浏览线上归档页。
+**Q：怎么开推送？**
+在 Secrets 里配置任一渠道（如 `FEISHU_WEBHOOK_URL`），窗口内就会推送。不配置则只更新网站。
 
-**Q: 当日汇总显示的"生成时间"是真实时间吗？**
-A: 是。页面顶部的时间戳取自本轮抓取，与 Actions 运行时段一致。
-CI 每轮会先用 `scripts/check_daily_freshness.py` 解析报告正文里的时间戳校验新鲜度，
-过期则真实重跑 `REPORT_MODE=daily`，不再用拷贝兜底。
+**Q：当日汇总的时间是真实的吗？**
+是。CI 每轮用 `check_daily_freshness.py` 校验 `daily.html` 是否为今天且 24 小时内生成，
+过期则用 `RENDER_ONLY` 从已保存的数据重新渲染，不会拿当前榜单冒充。
+
+**Q：克隆下来为什么没有历史报告？**
+报告在 `reports` 分支。用上面的 `git clone --branch reports` 命令，或直接浏览线上归档。
 
 ## 致谢与许可
 
-- **引擎**：[TrendRadar](https://github.com/sansan0/TrendRadar) by [@sansan0](https://github.com/sansan0)（GPL-3.0）——
-  没有这个优秀的开源项目就没有本雷达
-- **热榜数据**：[newsnow](https://github.com/ourongxing/newsnow) 公共聚合 API
-- **AI**：[智谱 BigModel](https://open.bigmodel.cn) 提供的免费 GLM-4-Flash
+- **引擎**：[TrendRadar](https://github.com/sansan0/TrendRadar) by [@sansan0](https://github.com/sansan0)（GPL-3.0）
+- **热榜数据**：[newsnow](https://github.com/ourongxing/newsnow)
+- **AI**：[智谱 BigModel](https://open.bigmodel.cn) GLM-4-Flash
 
-本项目遵循 [GPL-3.0](./LICENSE) 开源，与上游保持一致。
+本项目遵循 [GPL-3.0](./LICENSE)，与上游保持一致。
