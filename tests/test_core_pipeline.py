@@ -121,6 +121,16 @@ def freeze_time(monkeypatch, dt):
     monkeypatch.setattr(context_mod, "get_configured_time", lambda tz=None: dt)
     monkeypatch.setattr(context_mod, "format_date_folder", lambda date=None, timezone=None: dt.strftime("%Y-%m-%d"))
     monkeypatch.setattr(context_mod, "format_time_filename", lambda timezone=None: dt.strftime("%H-%M"))
+    # 存储层有自己的时钟：不一并冻结时，真实日期一旦不是 dt 那天，「保存后立即读取」就会读错库
+    import trendradar.storage.local as storage_local_mod
+    monkeypatch.setattr(storage_local_mod, "get_configured_time", lambda tz=None: dt)
+    monkeypatch.setattr(
+        storage_local_mod, "format_date_folder",
+        lambda date=None, timezone="Asia/Shanghai", _real=storage_local_mod.format_date_folder: (
+            _real(date, timezone) if date else dt.strftime("%Y-%m-%d")
+        ),
+    )
+    monkeypatch.setattr(storage_local_mod, "format_time_filename", lambda timezone=None: dt.strftime("%H-%M"))
 
 
 # ---------------------------------------------------------------------------

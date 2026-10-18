@@ -2,64 +2,83 @@
 
 # 📡 Hot News Radar
 
-**AI-driven full-coverage hot-news aggregation radar — no keyword limits**
+**Full-coverage news radar — no platform, keyword or category limits**
 
-Hourly multi-platform trending fetch · Full-coverage mode (no keyword filtering) ·
-AI translation / semantic dedup / daily briefing · Scheduled push
+11 Chinese hot lists + 8 international RSS feeds, with AI translation, semantic dedup,
+trend analysis and a daily briefing, published as a static site.
 
-[![GitHub Actions](https://img.shields.io/badge/⏰_Auto-GitHub_Actions-2088FF?logo=githubactions)](https://github.com/LeilaoMi/hot-news-radar/actions)
-[![Reports](https://img.shields.io/badge/📊_Archive-Online-4285F4)](https://leilaomi.github.io/hot-news-radar/reports/archive.html)
+[![Get Hot News](https://github.com/LeilaoMi/hot-news-radar/actions/workflows/crawler.yml/badge.svg)](https://github.com/LeilaoMi/hot-news-radar/actions/workflows/crawler.yml)
+[![Tests](https://github.com/LeilaoMi/hot-news-radar/actions/workflows/test.yml/badge.svg)](https://github.com/LeilaoMi/hot-news-radar/actions/workflows/test.yml)
+[![Site](https://img.shields.io/badge/🌐_Site-news.leilaomi.abrdns.com-4285F4)](https://news.leilaomi.abrdns.com/)
 [![License](https://img.shields.io/badge/⚖️_License-GPL--3.0-blue)](LICENSE)
 
 </div>
 
 ---
 
-## ✨ Features
+The full Chinese documentation is in [README.md](README.md). This page is a summary.
 
-- **Multi-platform**: 11 Chinese hot lists (Toutiao / Weibo / Bilibili / Douyin / Zhihu...)
-  + 8 international RSS feeds (BBC / NYT / Guardian / Al Jazeera / UN News / HN / Yahoo Finance / FP)
-- **Full-coverage mode**: empty keyword config = everything is kept — upstream TrendRadar
-  is a keyword monitor, this fork is a full news radar
-- **AI powered** (free GLM-4-Flash): title translation, optional semantic dedup
-  (merging multi-source reports of the same event, off by default), daily analysis page
-- **Web outputs**: hourly snapshot archive, AI daily page, trends page, RSS + JSON Feed,
-  visual config editor and a keyword subscription generator — all static, served by GitHub Pages
-- **Scheduled push**: morning brief (07:30–08:30) + evening digest (20:30–21:30)
-- **Zero cost**: runs entirely within GitHub Actions free tier, 128 pytest cases included
+## What it does
 
-## 🚀 Quick start
+- **Collects** 11 Chinese hot lists (via [newsnow](https://github.com/ourongxing/newsnow)) and 8 RSS feeds
+  (BBC, NYT, Guardian, Al Jazeera, UN News, Foreign Policy, Hacker News, Yahoo Finance).
+- **Keeps everything**: an empty `config/frequency_words.txt` means full-coverage mode.
+  Upstream [TrendRadar](https://github.com/sansan0/TrendRadar) is a keyword monitor; this fork is a news radar.
+- **AI** (free GLM-4-Flash, `openai/glm-4-flash-250414`): RSS title translation with strict numbered alignment,
+  multi-source semantic dedup, trend analysis and an AI daily page. All AI work in one run shares a 480 s budget
+  with a circuit breaker; truncated or invalid output counts as failure and is never cached.
+- **Publishes** per-run snapshots, a daily digest, the AI daily page, a trends page and RSS / JSON feeds to the
+  `reports` branch, served by GitHub Pages at [news.leilaomi.abrdns.com](https://news.leilaomi.abrdns.com/).
 
-1. Fork / copy this repo
-2. (Optional) Configure Secrets: `FEISHU_WEBHOOK_URL`, `TELEGRAM_BOT_TOKEN`, `AI_API_KEY`...
-3. Trigger **Get Hot News** manually or wait for hourly cron (:33)
+## How it runs
 
-Local run requires Python ≥ 3.12 + [uv](https://docs.astral.sh/uv/):
+- Workflow `crawler.yml`, cron `5,35 * * * *`. GitHub actually fires about 4–6 times a day, 4–7 minutes each.
+- Windows (Asia/Shanghai): morning 06:00–10:00 (current mode) and evening 19:00–23:59 (daily mode),
+  analysis and push once per window. No notification channel is configured on the live site.
+- Cross-run state (`output/news`, `output/rss`, `output/ai_cache.db`) is kept with `actions/cache`,
+  so once-per-window, new-item detection, daily totals and the AI cache work across runs.
+- A stale daily page is re-rendered with `RENDER_ONLY=true` (no crawl, no AI, no push).
+- Exit codes: `0` success, `1` fatal (all platforms failed, storage or render failure, config error),
+  `2` platform failures above `PLATFORM_FAILURE_THRESHOLD`.
+- `sync_reports_branch.py` pushes with `--force-with-lease` against a base commit, so concurrent runs
+  cannot drop each other's snapshots. Hourly snapshots are kept 90 days.
+
+## Quick start
 
 ```bash
-uv sync --frozen --no-dev
-uv run python -m trendradar
+git clone https://github.com/LeilaoMi/hot-news-radar.git
+cd hot-news-radar
+uv sync --frozen
+uv run python -m trendradar          # one run
+uv run python -m trendradar --doctor # health check
+uv run --with pytest pytest          # 556 tests
 ```
 
-## 📊 Online resources
+For GitHub Actions, fork the repo, add `AI_API_KEY` (optional) and set Pages to the `reports` branch.
+Notification channels, S3, Cloudflare Pages and ntfy failure alerts are all optional secrets.
 
-| Entry | Description |
-|---|---|
-| [Portal](https://leilaomi.github.io/hot-news-radar/) | Unified entry to everything below |
-| [Latest report](https://leilaomi.github.io/hot-news-radar/reports/latest/current.html) | Most recent snapshot |
-| [Daily digest](https://leilaomi.github.io/hot-news-radar/reports/latest/daily.html) | Accumulated daily view + AI analysis |
-| [AI daily page](https://leilaomi.github.io/hot-news-radar/reports/ai-daily/index.html) | Daily AI analysis briefing |
-| [History archive](https://leilaomi.github.io/hot-news-radar/reports/archive.html) | All snapshots by date |
-| [Visual editor](https://leilaomi.github.io/hot-news-radar/editor.html) | Edit keywords & timeline in browser |
-| [Subscription generator](https://leilaomi.github.io/hot-news-radar/subscribe.html) | Build `frequency_words.txt` snippets by clicking topics |
+## Docker and MCP
 
-## 🙏 Credits
+```bash
+cd docker && cp .env.example .env    # MCP container requires MCP_AUTH_TOKEN (16+ chars)
+docker compose -f docker-compose-build.yml up -d --build
+```
 
-Built on top of [TrendRadar](https://github.com/sansan0/TrendRadar) (GPL-3.0).
-Thanks [@sansan0](https://github.com/sansan0) for the excellent engine.
-This repo adds full-coverage mode, RSS ingestion, semantic dedup, AI daily page,
-subscription generator and the two-branch archive architecture.
+Images build locally (`trendradar:local`, `trendradar-mcp:local`), run as non-root with a HEALTHCHECK.
+The MCP server (27 tools) binds `127.0.0.1` by default, requires a bearer token on non-loopback addresses
+and validates Host/Origin against DNS rebinding. See [README-MCP-FAQ-EN.md](README-MCP-FAQ-EN.md).
 
-## 📄 License
+## Security
 
-[GPL-3.0](./LICENSE), same as upstream TrendRadar.
+http/https-only link allowlist in every report and push, CSP on report pages, escaped editor output,
+masked secrets in logs, least-privilege CI with SHA-pinned actions, and a dependency set with no known
+advisories. Never install litellm 1.82.7 or 1.82.8 (known malicious releases).
+
+## Known limits
+
+- GitHub's schedule drifts; on some days no run lands in the evening window.
+- `NTFY_TOPIC` is used both for failure alerts and for full report pushes; don't set it if you only want alerts.
+
+## License
+
+GPL-3.0, same as upstream TrendRadar.
