@@ -8,7 +8,7 @@ dependencies = [
     "pytz==2026.1",
     "PyYAML==6.0.3",
     # MCP：fastmcp 3.x + mcp 1.30（修复 CVE-2025-66416 DNS rebinding、CVE-2026-52869、CVE-2026-59951 等）
-    "fastmcp==3.4.9",
+    "fastmcp==3.4.10",
     "mcp==1.30.0",
     "feedparser==6.0.12",
     "boto3==1.43.1",
