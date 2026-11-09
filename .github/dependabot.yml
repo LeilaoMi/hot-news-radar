@@ -11,7 +11,7 @@ updates:
       - minor
       - patch
   cooldown:
-    default-days: 3
+    default-days: 7
 - package-ecosystem: docker
   directory: /docker
   schedule:
@@ -23,7 +23,7 @@ updates:
       - minor
       - patch
   cooldown:
-    default-days: 3
+    default-days: 7
 - package-ecosystem: github-actions
   directory: /
   schedule:
@@ -33,4 +33,4 @@ updates:
       patterns:
       - '*'
   cooldown:
-    default-days: 3
+    default-days: 7
