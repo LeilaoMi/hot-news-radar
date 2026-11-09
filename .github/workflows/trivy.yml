@@ -40,7 +40,10 @@ jobs:
           # action's daily cache (default $GITHUB_WORKSPACE/.cache/trivy).
           cache-dir: ${{ github.workspace }}/.cache/trivy-fs
       - name: Upload Trivy fs results to code scanning
-        if: always()
+        # Upload only when the token can write: on fork / Dependabot
+        # PRs GITHUB_TOKEN is read-only and the upload fails even
+        # though nothing was found (same guard as gitleaks.yml).
+        if: ${{ always() && (github.event_name == 'push' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) }}
         uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
         with:
           sarif_file: trivy-fs.sarif
@@ -68,7 +71,10 @@ jobs:
           # run in parallel and must not share the action's daily cache.
           cache-dir: ${{ github.workspace }}/.cache/trivy-config
       - name: Upload Trivy config results to code scanning
-        if: always()
+        # Upload only when the token can write: on fork / Dependabot
+        # PRs GITHUB_TOKEN is read-only and the upload fails even
+        # though nothing was found (same guard as gitleaks.yml).
+        if: ${{ always() && (github.event_name == 'push' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) }}
         uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
         with:
           sarif_file: trivy-config.sarif
