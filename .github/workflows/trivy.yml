@@ -1,3 +1,5 @@
+# hot-news-radar: this repo's default branch is master (no main
+# branch exists), so the push trigger below targets master.
 name: Trivy
 # Pilot: filesystem scan (dependency vulnerabilities) + config scan
 # (Dockerfile / IaC misconfigurations). Report-only: exit-code 0,
@@ -8,7 +10,7 @@ name: Trivy
 # parallel jobs do not share the action's daily cache.
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
 permissions:
   contents: read
