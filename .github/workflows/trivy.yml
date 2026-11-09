@@ -1,0 +1,81 @@
+# hot-news-radar: this repo's default branch is master (no main
+# branch exists), so the push trigger below targets master.
+name: Trivy
+# Pilot: filesystem scan (dependency vulnerabilities) + config scan
+# (Dockerfile / IaC misconfigurations). Report-only: exit-code 0,
+# results go to code scanning as SARIF, nothing blocks the PR.
+# The two scans run as independent jobs so a failure in the fs scan
+# (or its SARIF upload) cannot skip the config scan, and vice versa.
+# Each job also gets its own Trivy cache directory, so the two
+# parallel jobs do not share the action's daily cache.
+on:
+  push:
+    branches: [master]
+  pull_request:
+permissions:
+  contents: read
+  security-events: write
+jobs:
+  trivy-fs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # persist-credentials is off: these jobs only read code
+          # and never push, so the token must not linger in
+          # .git/config (same rationale as gitleaks.yml/semgrep.yml;
+          # also flagged by zizmor in the same review).
+          persist-credentials: false
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          limit-severities-for-sarif: true
+          format: sarif
+          output: trivy-fs.sarif
+          exit-code: '0'
+          # Own cache directory: the two Trivy jobs must not share the
+          # action's daily cache (default $GITHUB_WORKSPACE/.cache/trivy).
+          cache-dir: ${{ github.workspace }}/.cache/trivy-fs
+      - name: Upload Trivy fs results to code scanning
+        # No fork/Dependabot guard here on purpose: GitHub docs say code
+        # scanning always allows SARIF upload on pull_request runs, even
+        # with a read-only token; gating would silently drop those results.
+        if: always()
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+  trivy-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # persist-credentials is off: these jobs only read code
+          # and never push, so the token must not linger in
+          # .git/config (same rationale as gitleaks.yml/semgrep.yml;
+          # also flagged by zizmor in the same review).
+          persist-credentials: false
+      - name: Trivy config scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          severity: CRITICAL,HIGH
+          limit-severities-for-sarif: true
+          format: sarif
+          output: trivy-config.sarif
+          exit-code: '0'
+          # Own cache directory, distinct from trivy-fs: the two jobs
+          # run in parallel and must not share the action's daily cache.
+          cache-dir: ${{ github.workspace }}/.cache/trivy-config
+      - name: Upload Trivy config results to code scanning
+        # No fork/Dependabot guard here on purpose: GitHub docs say code
+        # scanning always allows SARIF upload on pull_request runs, even
+        # with a read-only token; gating would silently drop those results.
+        if: always()
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          sarif_file: trivy-config.sarif
+          category: trivy-config
