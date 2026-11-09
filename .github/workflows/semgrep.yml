@@ -1,3 +1,5 @@
+# hot-news-radar: this repo's default branch is master (no main
+# branch exists), so the push trigger below targets master.
 name: Semgrep
 # Static code scanning, report-only (does not block PRs).
 # Note: semgrep-action wrapper is deprecated upstream; this uses the
@@ -14,7 +16,7 @@ name: Semgrep
 # a stale or partial SARIF.
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
 permissions:
   contents: read
