@@ -1,3 +1,5 @@
+# hot-news-radar: this repo's default branch is master (no main
+# branch exists), so the push trigger below targets master.
 name: Gitleaks
 # Detect hardcoded secrets in git history and code.
 # Two jobs:
@@ -32,7 +34,7 @@ name: Gitleaks
 # v8.30.1).
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
 # Workflow-level permissions are minimal (contents: read): the
 # security-events: write needed for SARIF upload lives on the
