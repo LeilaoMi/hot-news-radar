@@ -1,3 +1,6 @@
+# hot-news-radar: repo-specific Gitleaks config (see the
+# [allowlist] stopword in the env block below). The generic file has
+# no allowlist; this repo's MCP test fixture token needs one.
 # hot-news-radar: this repo's default branch is master (no main
 # branch exists), so the push trigger below targets master.
 name: Gitleaks
@@ -43,6 +46,26 @@ on:
 # PR comments are disabled, so it needs no write permission).
 permissions:
   contents: read
+env:
+  # Shared by all three scans in this file (CLI steps and the action
+  # both follow the gitleaks config precedence, which includes
+  # GITLEAKS_CONFIG_TOML). [extend] useDefault is required: a custom
+  # config without it REPLACES the default rules and nothing is
+  # detected at all (verified locally against gitleaks v8.30.1).
+  GITLEAKS_CONFIG_TOML: |
+    [extend]
+    useDefault = true
+
+    [allowlist]
+    # The Bearer token used by tests/test_mcp_security.py is a test
+    # fixture, not a credential: it lives only in that test file (in
+    # all of history), is exercised 17 times against an in-process
+    # TestClient with no network, and its value is synthetic
+    # ("test" embedded, 10-digit tail). A stopword (exact value)
+    # suppresses only findings containing this exact string; a real
+    # secret is still flagged. The value is already public in the
+    # repo, so listing it here as a stopword exposes nothing new.
+    stopwords = ["t0ken-for-tests-0123456789"]
 jobs:
   gitleaks:
     runs-on: ubuntu-latest
