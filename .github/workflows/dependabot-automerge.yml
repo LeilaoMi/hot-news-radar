@@ -1,0 +1,11 @@
+name: Dependabot auto-merge
+# 非大版本的 Dependabot PR 自动开启 auto-merge；ruleset 里的必需检查全部通过后才会真正合并。
+on: pull_request
+permissions: {}
+jobs:
+  automerge:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: LeilaoMi/security-workflows/.github/workflows/dependabot-automerge.yml@9a7caf1858763e57a9796ec3be8f3be6db887bec # v5
