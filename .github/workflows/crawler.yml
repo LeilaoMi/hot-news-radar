@@ -49,14 +49,10 @@ jobs:
       #   - 它的 HEAD 作为 Sync 步骤 --force-with-lease 的预期基线（REPORTS_BASE_OID）
       #   - 它的对象库让 Sync 只上传变化的文件
       - name: Restore historical reports from reports branch
-        env:
-          GH_TOKEN: ${{ github.token }}
+        # 公开仓库，只读克隆不需要凭据（去掉 add-mask 的 base64 令牌）
         run: |
           set -euo pipefail
-          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
-          echo "::add-mask::$auth"
-          git -c http.extraheader="AUTHORIZATION: basic $auth" \
-            clone --quiet --depth 1 --branch reports \
+          git clone --quiet --depth 1 --branch reports \
             "https://github.com/${GITHUB_REPOSITORY}.git" /tmp/pages-content
           base_oid="$(git -C /tmp/pages-content rev-parse HEAD)"
           echo "REPORTS_BASE_OID=$base_oid" >> "$GITHUB_ENV"
