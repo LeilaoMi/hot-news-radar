@@ -27,7 +27,6 @@ jobs:
     timeout-minutes: 50
     permissions:
       contents: write   # 仅 Sync 步骤用于推送 reports 分支
-      models: read      # GitHub Models 兜底（主模型失败时才调用）
 
     # 作业级只放非敏感配置；secrets 只注入到真正需要它的步骤（审计 3.5）
     env:
@@ -131,7 +130,6 @@ jobs:
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
           AI_MODEL: ${{ secrets.AI_MODEL }}
           AI_API_BASE: ${{ secrets.AI_API_BASE }}
-          GITHUB_MODELS_TOKEN: ${{ github.token }}
           AI_ANALYSIS_MODEL: ${{ secrets.AI_ANALYSIS_MODEL }}
           AI_TIMEOUT: ${{ secrets.AI_TIMEOUT }}
           AI_ANALYSIS_ENABLED: ${{ secrets.AI_ANALYSIS_ENABLED }}
@@ -156,7 +154,6 @@ jobs:
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
           AI_MODEL: ${{ secrets.AI_MODEL }}
           AI_API_BASE: ${{ secrets.AI_API_BASE }}
-          GITHUB_MODELS_TOKEN: ${{ github.token }}
           AI_ANALYSIS_MODEL: ${{ secrets.AI_ANALYSIS_MODEL }}
           AI_ANALYSIS_ENABLED: ${{ secrets.AI_ANALYSIS_ENABLED }}
           AI_TRANSLATION_ENABLED: ${{ secrets.AI_TRANSLATION_ENABLED }}
