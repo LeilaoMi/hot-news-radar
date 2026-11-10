@@ -71,6 +71,8 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          enable-cache: false  # 定时发布任务不用缓存，防缓存投毒
 
       - name: Install dependencies
         run: uv sync --frozen --no-dev

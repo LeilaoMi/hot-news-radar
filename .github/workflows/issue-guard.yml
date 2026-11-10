@@ -3,12 +3,12 @@ name: Issue Guard
 on:
   issues:
     types: [opened]
-  issue_comment:
+  issue_comment: # zizmor: ignore[dangerous-triggers]
     types: [created]
   # fork 来的 PR 在 pull_request 事件下只有只读 token，评论/关闭会 403（审计 4.12）。
   # 改用 pull_request_target：拿到可写 token，但本 workflow **从不 checkout 或执行 PR 代码**，
   # 只读取事件 payload，因此没有「不可信代码 + 写权限」的风险。不要在这里加 checkout。
-  pull_request_target:
+  pull_request_target: # zizmor: ignore[dangerous-triggers] 不 checkout PR 代码，只读事件
     types: [opened]
   pull_request_review_comment:
     types: [created]
