@@ -81,6 +81,18 @@ class AIClient:
         # 最多约 (N+2) 次 HTTP 尝试；默认 0 保证单次尝试，耗时可预测
         self.num_retries = config.get("NUM_RETRIES", 0)
         self.fallback_models = config.get("FALLBACK_MODELS", []) or []
+        # GitHub Models 兜底：在 Actions 里设置 GITHUB_MODELS_TOKEN（= github.token，需 models: read）
+        # 时自动追加到备用模型末尾；主模型（如免费 GLM）失败才会用到。本地不设则无影响。
+        gh_token = os.environ.get("GITHUB_MODELS_TOKEN", "")
+        if gh_token:
+            self.fallback_models = [
+                *self.fallback_models,
+                {
+                    "model": "openai/" + (os.environ.get("GITHUB_MODELS_MODEL") or "openai/gpt-4.1-mini"),
+                    "api_base": "https://models.github.ai/inference",
+                    "api_key": gh_token,
+                },
+            ]
         extra = config.get("EXTRA_PARAMS") or {}
         self.extra_params = dict(extra) if isinstance(extra, dict) else {}
         self.feature = config.get("FEATURE", "")
