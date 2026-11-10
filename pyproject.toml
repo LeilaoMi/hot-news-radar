@@ -8,7 +8,7 @@ dependencies = [
     "pytz==2026.1",
     "PyYAML==6.0.3",
     # MCP：fastmcp 3.x + mcp 1.30（修复 CVE-2025-66416 DNS rebinding、CVE-2026-52869、CVE-2026-59951 等）
-    "fastmcp==3.4.9",
+    "fastmcp==3.4.10",
     "mcp==1.30.0",
     "feedparser==6.0.12",
     "boto3==1.43.1",
@@ -33,6 +33,8 @@ dev = [
 [tool.uv]
 # 间接依赖的安全下限（pip-audit 公告修复版本）
 constraint-dependencies = [
+    "joserfc>=1.7.6",
+    "fastmcp-slim>=3.4.10",
     "starlette>=1.3.1",
     "urllib3>=2.8.0",
     "aiohttp>=3.14.3",
