@@ -4,18 +4,18 @@ version = "6.10.0"
 description = "TrendRadar - 热点新闻聚合与分析工具"
 requires-python = ">=3.12"
 dependencies = [
-    "requests==2.33.0",
-    "pytz==2026.1",
+    "requests==2.34.2",
+    "pytz==2026.6",
     "PyYAML==6.0.3",
     # MCP：fastmcp 3.x + mcp 1.30（修复 CVE-2025-66416 DNS rebinding、CVE-2026-52869、CVE-2026-59951 等）
     "fastmcp==3.4.10",
     "mcp==1.30.0",
-    "feedparser==6.0.12",
-    "boto3==1.43.1",
+    "feedparser==6.0.14",
+    "boto3==1.43.124",
     # 安全说明：litellm 1.82.7 / 1.82.8 是供应链投毒的恶意版本（MAL-2026-2144 / GHSA-5mg7-485q-xm76），
     # 任何情况下都不要使用。1.104.3 为 OSV 无公告、带 GitHub release 的版本；升级时请人工核对 uv.lock 中的版本与 hash。
-    "litellm==1.104.3",
-    "json-repair==0.63.5",
+    "litellm==1.108.0",
+    "json-repair==0.64.5",
     "tenacity==8.5.0",
 ]
 
@@ -27,7 +27,7 @@ trendradar-mcp = "mcp_server.server:main"
 dev = [
     "pytest>=8",
     "pytest-timeout>=2.3",
-    "ruff==0.17.1",
+    "ruff==0.17.3",
 ]
 
 [tool.uv]
