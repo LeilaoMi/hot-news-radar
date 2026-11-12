@@ -1,5 +1,5 @@
 # 基础镜像固定版本 + digest，保证构建可复现（更新时请同时更新 tag 与 digest）
-FROM python:3.12.15-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258
+FROM python:3.15.0-slim-bookworm@sha256:0e019bbdfb5d9874cb2389f1c2884b64aa2ac97c99960b5bc521cef978c0617d
 
 LABEL org.opencontainers.image.title="trendradar" \
       org.opencontainers.image.source="https://github.com/LeilaoMi/hot-news-radar" \
