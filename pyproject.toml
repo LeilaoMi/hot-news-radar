@@ -16,7 +16,7 @@ dependencies = [
     # 任何情况下都不要使用。1.104.3 为 OSV 无公告、带 GitHub release 的版本；升级时请人工核对 uv.lock 中的版本与 hash。
     "litellm==1.108.0",
     "json-repair==0.64.5",
-    "tenacity==8.5.0",
+    "tenacity==9.2.1",
 ]
 
 [project.scripts]
