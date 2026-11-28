@@ -1,0 +1,66 @@
+{
+  "version": "https://jsonfeed.org/version/1.1",
+  "title": "Hot News Radar 快照订阅",
+  "home_page_url": "https://news.leilaomi.abrdns.com/",
+  "feed_url": "https://news.leilaomi.abrdns.com/reports/feed.json",
+  "description": "每日新闻雷达快照更新通知",
+  "language": "zh-CN",
+  "items": [
+    {
+      "id": "2026-11-29",
+      "url": "https://news.leilaomi.abrdns.com/reports/2026-11-29/02-27.html",
+      "title": "2026-11-29 热点雷达 · 1 个时段快照",
+      "content_text": "2026-11-29 共 1 次抓取，覆盖全天热点变化。首次 02:27，末次 02:27。",
+      "date_published": "2026-11-29T02:27:00+08:00",
+      "date_modified": "2026-11-29T02:27:00+08:00"
+    },
+    {
+      "id": "2026-11-28",
+      "url": "https://news.leilaomi.abrdns.com/reports/2026-11-28/18-16.html",
+      "title": "2026-11-28 热点雷达 · 3 个时段快照",
+      "content_text": "2026-11-28 共 3 次抓取，覆盖全天热点变化。首次 02:53，末次 18:16。",
+      "date_published": "2026-11-28T02:53:00+08:00",
+      "date_modified": "2026-11-28T18:16:00+08:00"
+    },
+    {
+      "id": "2026-11-27",
+      "url": "https://news.leilaomi.abrdns.com/reports/2026-11-27/17-02.html",
+      "title": "2026-11-27 热点雷达 · 2 个时段快照",
+      "content_text": "2026-11-27 共 2 次抓取，覆盖全天热点变化。首次 08:34，末次 17:02。",
+      "date_published": "2026-11-27T08:34:00+08:00",
+      "date_modified": "2026-11-27T17:02:00+08:00"
+    },
+    {
+      "id": "2026-11-26",
+      "url": "https://news.leilaomi.abrdns.com/reports/2026-11-26/23-47.html",
+      "title": "2026-11-26 热点雷达 · 3 个时段快照",
+      "content_text": "2026-11-26 共 3 次抓取，覆盖全天热点变化。首次 07:37，末次 23:47。",
+      "date_published": "2026-11-26T07:37:00+08:00",
+      "date_modified": "2026-11-26T23:47:00+08:00"
+    },
+    {
+      "id": "2026-11-25",
+      "url": "https://news.leilaomi.abrdns.com/reports/2026-11-25/22-57.html",
+      "title": "2026-11-25 热点雷达 · 3 个时段快照",
+      "content_text": "2026-11-25 共 3 次抓取，覆盖全天热点变化。首次 04:53，末次 22:57。",
+      "date_published": "2026-11-25T04:53:00+08:00",
+      "date_modified": "2026-11-25T22:57:00+08:00"
+    },
+    {
+      "id": "2026-11-24",
+      "url": "https://news.leilaomi.abrdns.com/reports/2026-11-24/18-24.html",
+      "title": "2026-11-24 热点雷达 · 2 个时段快照",
+      "content_text": "2026-11-24 共 2 次抓取，覆盖全天热点变化。首次 08:21，末次 18:24。",
+      "date_published": "2026-11-24T08:21:00+08:00",
+      "date_modified": "2026-11-24T18:24:00+08:00"
+    },
+    {
+      "id": "2026-11-23",
+      "url": "https://news.leilaomi.abrdns.com/reports/2026-11-23/20-23.html",
+      "title": "2026-11-23 热点雷达 · 4 个时段快照",
+      "content_text": "2026-11-23 共 4 次抓取，覆盖全天热点变化。首次 01:05，末次 20:23。",
+      "date_published": "2026-11-23T01:05:00+08:00",
+      "date_modified": "2026-11-23T20:23:00+08:00"
+    }
+  ]
+}
